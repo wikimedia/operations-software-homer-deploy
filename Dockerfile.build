@@ -1,0 +1,6 @@
+FROM docker-registry.wikimedia.org/python3-build-stretch:0.0.2
+
+RUN apt-get update && apt-get -y --no-install-recommends install build-essential libldap2-dev \
+    libsasl2-dev liberasurecode-dev && pip3 install --upgrade setuptools
+
+COPY freeze_requirements.sh /bin/freeze
