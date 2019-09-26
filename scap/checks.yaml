@@ -5,4 +5,4 @@ checks:
     stage: promote
     timeout: 300
     group: default
-    command: bash /srv/deployment/homer/deploy/scap/checks/virtualenv.sh
+    command: bash /srv/deployment/homer/deploy/scap/cmd.sh
