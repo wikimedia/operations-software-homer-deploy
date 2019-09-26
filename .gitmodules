@@ -1,4 +1,4 @@
-[submodule "homer"]
+[submodule "src"]
 	path = src
 	url = https://gerrit.wikimedia.org/r/operations/software/homer
 	branch = master
