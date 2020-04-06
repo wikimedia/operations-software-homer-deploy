@@ -2,5 +2,7 @@ build
 artifacts/*.whl
 .docker_built
 scap/log/
+__pycache__/
+*.pyc
 *~
 .\#*

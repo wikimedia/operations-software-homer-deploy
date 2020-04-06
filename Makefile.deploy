@@ -11,10 +11,11 @@ DEPLOY_PATH ?= $(CURDIR)/deploy
 # This task will create the virtualenv if not present, unpack the wheels present
 # in the artifacts directory, install them and install the software inside the
 # virtualenv.
-# It will also run any pending DB migration and collect the static files.
+# It will also inject the plugins directory as an homer_plugins package
 deploy: $(VENV)
 	cd $(CURDIR)/artifacts && tar --owner=$(shell id -u) -zxvf artifacts.$(DISTRO).tar.gz
 	$(VENV)/bin/pip install --no-deps $(CURDIR)/artifacts/*.whl
+	cp -a $(CURDIR)/plugins $(VENV)/lib/python3.?/site-packages/homer_plugins
 
 # task venv
 # Creates the virtualenv if not present
