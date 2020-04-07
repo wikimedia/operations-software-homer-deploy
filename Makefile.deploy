@@ -5,6 +5,8 @@ VENV ?= $(CURDIR)/venv
 DISTRO ?= $(shell lsb_release -sc)
 # The base path where the deploy repository root is installed
 DEPLOY_PATH ?= $(CURDIR)/deploy
+# Python version
+PYTHON_VERSION ?= $(shell $(VENV)/bin/python -c 'from sys import version_info as v; print("%d.%d" % (v[0], v[1]))')
 
 ### Scap-related tasks ###
 # task deploy
@@ -15,7 +17,7 @@ DEPLOY_PATH ?= $(CURDIR)/deploy
 deploy: $(VENV)
 	cd $(CURDIR)/artifacts && tar --owner=$(shell id -u) -zxvf artifacts.$(DISTRO).tar.gz
 	$(VENV)/bin/pip install --no-deps $(CURDIR)/artifacts/*.whl
-	cp -a $(CURDIR)/plugins $(VENV)/lib/python3.?/site-packages/homer_plugins
+	cp -a $(CURDIR)/plugins $(VENV)/lib/python$(PYTHON_VERSION)/site-packages/homer_plugins
 
 # task venv
 # Creates the virtualenv if not present
