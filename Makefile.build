@@ -1,11 +1,14 @@
 # Specialized makefile for building the deployment artifacts
+# Debian version to build for
+DEBIAN_VER ?= stretch
 # Global build dir
-BUILD_DIR = $(CURDIR)/build
+BUILD_DIR := $(CURDIR)/build
 # Directory where the wheels are built
-WHEELS_DIR = $(BUILD_DIR)/wheels
-
-IMG_BASENAME := 'docker-registry.wikimedia.org/python3-build'
-STRETCH_ARTIFACTS = $(WHEELS_DIR)/stretch/artifacts.tar.gz
+WHEELS_DIR := $(BUILD_DIR)/wheels
+# Docker image
+IMG_NAME := docker-registry.wikimedia.org/python3-build-$(DEBIAN_VER)
+# Where to save the artficats
+ARTIFACTS := $(WHEELS_DIR)/$(DEBIAN_VER)/artifacts.tar.gz
 
 ### Build-related tasks ###
 # task all
@@ -13,29 +16,29 @@ STRETCH_ARTIFACTS = $(WHEELS_DIR)/stretch/artifacts.tar.gz
 all: clean freeze artifacts
 
 # task artifacts
-# Build the wheels for all or a specific DISTRO inside a container, and get the tar to the right place
-artifacts: $(STRETCH_ARTIFACTS)
-	cp $(STRETCH_ARTIFACTS) $(CURDIR)/artifacts/artifacts.stretch.tar.gz
+# Build the wheels for the specific DISTRO inside a container, and get the tar.gz to the right place
+artifacts: $(ARTIFACTS)
+	cp $(ARTIFACTS) $(CURDIR)/artifacts/artifacts.$(DEBIAN_VER).tar.gz
 
-$(STRETCH_ARTIFACTS): .docker_built
-	mkdir -p $(WHEELS_DIR)/stretch
-	docker run --rm -v $(CURDIR):/deploy:ro -v $(WHEELS_DIR)/stretch:/wheels:rw -v /etc/group:/etc/group:ro \
+$(ARTIFACTS): .docker_built
+	mkdir -p $(WHEELS_DIR)/$(DEBIAN_VER)
+	docker run --rm -v $(CURDIR):/deploy:ro -v $(WHEELS_DIR)/$(DEBIAN_VER):/wheels:rw -v /etc/group:/etc/group:ro \
 		-v /etc/passwd:/etc/passwd:ro --user=$(UID) homer-build:local
 
-# task clean[-DISTRO]
+# task clean
 # clean docker artifacts for one distro
 clean:
-	- rm -rf $(WHEELS_DIR)
+	- rm -rf $(WHEELS_DIR)/$(DEBIAN_VER)
 	- rm -rf .docker_built
 
 freeze: .docker_built
 	docker run --rm -v $(CURDIR):/deploy:rw -v /etc/group:/etc/group:ro \
 		-v /etc/passwd:/etc/passwd:ro --user=$(UID) -w /deploy/src \
-		homer-build:local /bin/freeze
+		homer-build:local /bin/freeze $(DEBIAN_VER)
 
 .docker_built: Dockerfile.build freeze_requirements.sh
-	docker pull $(IMG_BASENAME)-stretch:latest
-	docker build -f Dockerfile.build -t homer-build:local .
+	docker pull $(IMG_NAME):latest
+	docker build --build-arg DEBIAN_VER=$(DEBIAN_VER) -f Dockerfile.build -t homer-build:local .
 	@touch $@
 
 .PHONY: all artifacts clean freeze

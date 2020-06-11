@@ -7,7 +7,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-FROZEN_REQUIREMENTS=/deploy/frozen-requirements.txt
+FROZEN_REQUIREMENTS=/deploy/frozen-requirements-${1}.txt
 
 function exit_trap() {
     # Reset the original submodule .git file

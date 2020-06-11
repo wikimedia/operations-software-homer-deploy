@@ -1,4 +1,5 @@
-FROM docker-registry.wikimedia.org/python3-build-stretch:latest
+ARG DEBIAN_VER
+FROM docker-registry.wikimedia.org/python3-build-${DEBIAN_VER}:latest
 
 RUN apt-get update && \
     apt-get -y --no-install-recommends install build-essential python3-dev \
