@@ -1,7 +1,8 @@
-build
-artifacts/*.whl
-.docker_built
-scap/log/
+/build
+/artifacts/*.whl
+/.docker_built
+/scap/log/
+/frozen-requirements.txt
 __pycache__/
 *.pyc
 *~

@@ -18,6 +18,7 @@ HOMER_PLUGINS := $(VENV)/lib/python$(PYTHON_VERSION)/site-packages/homer_plugins
 # It will also inject the plugins directory as an homer_plugins package
 deploy: $(VENV)
 	cd $(CURDIR)/artifacts && tar --owner=$(shell id -u) -zxvf artifacts.$(DISTRO).tar.gz
+	$(VENV)/bin/pip install --no-deps $(CURDIR)/artifacts/{pip,setuptools,wheel}*.whl
 	$(VENV)/bin/pip install --no-deps $(CURDIR)/artifacts/*.whl
 	rm -rfv $(HOMER_PLUGINS)
 	cp -a $(CURDIR)/plugins $(HOMER_PLUGINS)

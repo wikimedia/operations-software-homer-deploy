@@ -22,12 +22,14 @@ mv .git .git.orig
 cp -a ../.git/modules/src .git
 sed -i '/worktree =/d' .git/config
 
+python3 -m pip install --upgrade pip
 pip3 install "."
-pip3 freeze --local > "${FROZEN_REQUIREMENTS}"
+pip3 freeze --local --all > "${FROZEN_REQUIREMENTS}"
 
 # https://github.com/pypa/pip/issues/4668
 sed -i '/pkg-resources==0.0.0/d' "${FROZEN_REQUIREMENTS}"
 # Remove homer as it was added by pip but is not needed
-sed -i '/homer==/d' "${FROZEN_REQUIREMENTS}"
+sed -i '/^homer==/d' "${FROZEN_REQUIREMENTS}"
+sed -i '/^homer @/d' "${FROZEN_REQUIREMENTS}"
 
 echo "${FROZEN_REQUIREMENTS} updated, please commit it to git."

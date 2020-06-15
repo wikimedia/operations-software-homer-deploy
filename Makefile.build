@@ -22,6 +22,8 @@ artifacts: $(ARTIFACTS)
 
 $(ARTIFACTS): .docker_built
 	mkdir -p $(WHEELS_DIR)/$(DEBIAN_VER)
+	rm -f frozen-requirements.txt
+	ln -s frozen-requirements-$(DEBIAN_VER).txt frozen-requirements.txt
 	docker run --rm -v $(CURDIR):/deploy:ro -v $(WHEELS_DIR)/$(DEBIAN_VER):/wheels:rw -v /etc/group:/etc/group:ro \
 		-v /etc/passwd:/etc/passwd:ro --user=$(UID) homer-build:local
 
