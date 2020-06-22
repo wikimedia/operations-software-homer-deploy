@@ -61,17 +61,18 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         jsi['tagged'] = {}
         jsi['misc'] = {}
         for nb_int in self.fetch_device_interfaces():
+            interface_name = nb_int.name
             # TODO skip the ones we don't want
             if not nb_int.enabled:
                 continue
             # Start by the easy ones, access only
             # Tagged    Untagged
             # False     True
-            if not nb_int.tagged_vlans and nb_int.untagged_vlan:
-                # Because of how Juniper expose its data, the vlans are applied to the "sub" interface
-                # But we only need the "parent" interface name, so we remove anything like ".0"
-                interface_name = nb_int.name.split('.')[0]
-                vlan_name = nb_int.untagged_vlan.name
+            if str(nb_int.mode) == 'Access':
+                if nb_int.untagged_vlan:
+                    vlan_name = nb_int.untagged_vlan.name
+                else:
+                    vlan_name = 'default'
                 # Create the matching key if not already there
                 if vlan_name not in jsi['access_only']:
                     jsi['access_only'][vlan_name] = []
@@ -88,7 +89,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             # Trunk interface with or without a native vlan
             elif nb_int.tagged_vlans:
                 interface_config = {}
-                interface_name = nb_int.name.split('.')[0]
                 interface_config['name'] = interface_name
                 interface_config['description'] = self.interface_description(nb_int.name)
                 interface_config['vlan_members'] = []
@@ -101,7 +101,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                     interface_config['vlan_members'].append(nb_int.untagged_vlan.name)
                     # Junos needs the native vlan ID and not name
                     interface_config['native_vlan_id'] = nb_int.untagged_vlan.vid
-                interface_config['mtu'] = self.interface_mtu(nb_int.name)
+                interface_config['mtu'] = self.interface_mtu(interface_name)
                 jsi['tagged'][interface_name] = interface_config
 
             # Tagged    Untagged
@@ -109,19 +109,19 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             # This match all the junk
             else:
                 interface_config = {}
-                interface_config['description'] = self.interface_description(nb_int.name)
+                interface_config['description'] = self.interface_description(interface_name)
                 if nb_int.lag:
                     interface_config['lag'] = nb_int.lag.name
-                    jsi['misc'][nb_int.name] = interface_config
+                    jsi['misc'][interface_name] = interface_config
                     continue  # A LAG parent can't have an IP
-                # Check if the interface have an IP
+                # Check if an IP is assigned to that interface have an IP
                 for ip_address in self.fetch_device_ip_addresses():
                     # IPs are only configured on sub-interfaces
                     # A bit of a dirty hack just for our infra
                     # Check if the current interface have a subinterface with an IP
-                    if ip_address.interface.name == nb_int.name + '.0':
+                    if ip_address.interface.name == interface_name:
                         interface_config['address'] = ip_address.address
-                        jsi['misc'][nb_int.name] = interface_config
+                        jsi['misc'][interface_name] = interface_config
         return jsi
 
     # We have to specify in the Junos chassis stanza how many LAG interfaces we want to provision
@@ -146,7 +146,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                     a_int = nb_int
                     break
             elif '.' in interface_name and interface_name.split('.')[0] == nb_int.name:  # Parent interface found
-                if nb_int.description:  # and it have a description!
+                if nb_int.description:  # and it has a description!
                     description = nb_int.description
                 elif nb_int.cable:  # If it's connected, store it for later
                     a_int = nb_int
