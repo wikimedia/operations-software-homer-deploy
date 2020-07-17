@@ -1,5 +1,9 @@
 """Netbox gathering functions tailored to the WMF needs"""
+
+from collections import defaultdict
 from typing import Dict, List
+
+from ipaddress import ip_interface
 
 from homer.netbox import BaseNetboxDeviceData
 
@@ -52,6 +56,92 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             else:  # Everything else are regular interfaces
                 jdi['regular'].append(nb_int.name)
         return jdi
+
+    def _get_junos_router_interfaces(self):
+        """Expose Netbox interfaces in a way that can be efficiently used by a junos router template."""
+        jri = {}  # Junos router interfaces
+        lags_members = defaultdict(list)  # List all the lags to find mixed ones
+        ignore_interfaces = ['fxp0-re0', 'fxp0-re1']  # Those are managed in `set groups`
+        # Here, unlike for switches, we don't try to group interfaces together but set the proper attributes directly
+        for nb_int in self.fetch_device_interfaces():
+            # TODO skip the ones we don't want
+            if not nb_int.enabled:
+                continue
+            interface_name = nb_int.name
+            if interface_name in ignore_interfaces:
+                continue
+            # Regarless of what kind of interface it is, set attributes in a Juniper-ish tree
+            interface_config = {}
+
+            interface_config['description'] = self.interface_description(interface_name)
+
+            if nb_int.lag:
+                interface_config['lag'] = nb_int.lag.name
+                jri[interface_name] = interface_config
+                # We store the interfaces contributing to a specific LAG, because if they are of different types,
+                # We will later need to apply the "link-speed mixed" config option.
+                lags_members[nb_int.lag.name].append(interface_name)
+                continue
+            # For a LAG, the MTU is set on the ae (virtual) interface not the physical ones (bundle members)
+            interface_config['mtu'] = self.interface_mtu(interface_name)
+
+            if nb_int.mac_address:  # Set the MAC if any in netbox
+                interface_config['mac'] = nb_int.mac_address
+
+            # Assign the IPs to the interface if any
+            if nb_int.count_ipaddresses > 0:
+                # assumes there is v4 for everything
+                interface_config['ips'] = {4: {}, 6: {}}
+
+                vrrp_ips = {}
+                for ip_address in self.fetch_device_ip_addresses():
+                    if ip_address.interface.name != interface_name:
+                        # Only care about the IPs for our interface
+                        continue
+                    if ip_address.role and ip_address.role.value == 'vrrp':
+                        # If we're dealing with a vrrp IP, keep it on the side to later on make it a child
+                        # of the real interface IP
+                        vrrp_ips[ip_address.address] = ip_address.custom_fields['group_id']
+                        continue
+                    interface_config['ips'][ip_address.family.value][ip_interface(ip_address.address)] = {}
+
+                # Now assign any VRRP IP to the real interface,
+                # for that we need to find IPs belonging in the same subnet
+                for family, int_ips in interface_config['ips'].items():
+                    for int_ip in int_ips.keys():
+                        for vrrp_ip, vrrp_group in vrrp_ips.items():
+                            if ip_interface(vrrp_ip) in int_ip.network:
+                                interface_config['ips'][family][int_ip]['vrrp'] = {ip_interface(vrrp_ip).ip: vrrp_group}
+
+            # Now that we have all the interface or sub-interface attribute,
+            # we need to nest the sub interfaces in the interfaces when needed
+            if '.' in interface_name and interface_name.split('.')[0] in jri:
+                # It's a sub-interface and we already have the parent interface, add the sub interface
+                parent, sub = interface_name.split('.', 1)
+                if 'sub' not in jri[parent]:
+                    jri[parent]['sub'] = {}
+                jri[parent]['sub'][sub] = interface_config
+            # If we have the sub interface but not the parent yet
+            elif '.' in interface_name and interface_name.split('.')[0] not in jri:
+                parent, sub = interface_name.split('.', 1)
+                # Create the parent
+                jri[parent] = {'sub': {sub: interface_config}}
+            # If we have the parent interface but we found a sub interface earlier
+            elif '.' not in interface_name and interface_name in jri:
+                # Merge the new stuff with the existing one
+                jri[interface_name] = {**jri[parent], **interface_config}
+            # Easiest case, we find the parent interface first
+            elif '.' not in interface_name and interface_name not in jri:
+                jri[interface_name] = interface_config
+
+            # TODO Remove some Juniper oddities, eg. sub interfaces for LAG members
+
+        # Check if there is any mixed LAG
+        for lag, members in lags_members.items():
+            if len(set([member.split('-')[0] for member in members])) > 1:
+                jri[lag]['mixed'] = True
+
+        return jri
 
     def _get_junos_switch_interfaces(self) -> Dict[str, Dict]:
         """Expose Netbox interfaces in a way that can be efficiently used by a junos switch template."""
@@ -203,7 +293,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             # 1 is when we don't care about the Z (remote) side' device (eg. transits, peering)
             # 2 is when we manage both sides (eg. transport)
             if len(terminations) == 1:
-                description = "{type}: {provider} [{details}] {{#{cable_label}}}".format(type=type,
+                description = "{type}: {provider} ({details}) {{#{cable_label}}}".format(type=type,
                                                                                          provider=provider,
                                                                                          details=', '.join(details),
                                                                                          cable_label=cable_label)
