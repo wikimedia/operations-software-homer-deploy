@@ -1,7 +1,7 @@
 """Netbox gathering functions tailored to the WMF needs"""
 
 from collections import defaultdict
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 from ipaddress import ip_interface
 
@@ -17,6 +17,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         self._device_interfaces = None
         self._device_ip_addresses = None
         self._circuit_terminations = {}
+        self._device_circuits = {}
         self.device_id = self._device.metadata['netbox_object'].id
 
     def fetch_device_interfaces(self):
@@ -36,6 +37,33 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         if circuit_id not in self._circuit_terminations:
             self._circuit_terminations[circuit_id] = self._api.circuits.circuit_terminations.filter(circuit_id=circuit_id)
         return self._circuit_terminations[circuit_id]
+
+    def fetch_device_circuits(self) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Returns a dict of circuits connected to the device's interfaces
+
+        Returns:
+            dict: A dict of interface:circuit.
+
+        """
+        if not self._device_circuits:
+            # Because of changes documented in https://github.com/netbox-community/netbox/issues/4812
+            # if an interface is connected to another device using a circuit, the circuit doesn't show up
+            device_id = self._device.metadata['netbox_object'].id
+            # Only get the circuits terminating where the device is
+            circuits = {}
+
+            # We get all the cables connected to a device
+            for cable in self._api.dcim.cables.filter(device_id=device_id):
+                # And if one side is a circuit we store it, with the local interface name as key
+                if cable.termination_a_type == 'circuits.circuittermination':
+                    circuits[cable.termination_b.name] = self._api.circuits.circuits.get(
+                        cable.termination_a.circuit.id)
+                elif cable.termination_b_type == 'circuits.circuittermination':
+                    circuits[cable.termination_a.name] = self._api.circuits.circuits.get(
+                        cable.termination_b.circuit.id)
+            self._device_circuits = circuits
+
+        return self._device_circuits
 
     def _get_disabled(self) -> Dict[str, List[str]]:
         """Expose disabled interfaces in a way that can be efficiently used by the templates."""
@@ -255,7 +283,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         #    - A device's interface (via another cable)
         #    - A provider
         cable_label = a_int.cable.label
-        if a_int.connected_endpoint_type == 'dcim.interface':
+        # We get the list of circuits connected to the device, key = local interface name
+        circuits = self.fetch_device_circuits()
+        if a_int.name not in circuits:
             if a_int.connected_endpoint.device.virtual_chassis:
                 # In VCs we use its virtual name stored in the domain field
                 # And only keep the host part
@@ -276,13 +306,13 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                 cable_label=cable_label)  # TODO FIX
             return description
 
-        elif a_int.connected_endpoint_type == 'circuits.circuittermination':
+        elif a_int.name in circuits:
             # Constant variables regadless of the # of terminations
-            type = a_int.connected_endpoint.circuit.type.name
-            provider = a_int.connected_endpoint.circuit.provider.name
-            cid = a_int.connected_endpoint.circuit.cid
-            circuit_description = a_int.connected_endpoint.circuit.description
-            terminations = self.fetch_circuit_terminations(a_int.connected_endpoint.circuit.id)
+            type = circuits[a_int.name].type.name
+            provider = circuits[a_int.name].provider.name
+            cid = circuits[a_int.name].cid
+            circuit_description = circuits[a_int.name].description
+            terminations = self.fetch_circuit_terminations(circuits[a_int.name].id)
             details = []
             if cid:
                 details.append(cid)
@@ -299,19 +329,34 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                                                                                          cable_label=cable_label)
 
             elif len(terminations) == 2:
-                for termination in terminations:  # Find the Z side
-                    # Check if the (local or remote) side is a virtual chassis
-                    vc = termination.connected_endpoint.device.virtual_chassis
-                    # If the side is a VC use the master ID to make sure it's not our local side
-                    # Otherwise use the regular endpoint device_id
-                    if ((vc and (vc.master.id != self.device_id))
-                       or (not vc and (termination.connected_endpoint.device.id != self.device_id))):
-                        if vc:
-                            # Same as previously, if VC get the hostname from the domain field
-                            z_dev = vc.domain.split('.')[0]
-                        else:
-                            z_dev = termination.connected_endpoint.device.name
-                        z_int = termination.connected_endpoint.name
+                # There is curently an upstream issue where the remote endpoint will either be defined as
+                # circuit termination endpoint, or as interface remote endpoint, which are both mutually
+                # exclusive.
+                # https://github.com/netbox-community/netbox/issues/4812
+                # https://github.com/netbox-community/netbox/issues/4925
+                # TODO: It will most likely need to be refactored/cleaned up when everything is fixed upstream
+
+                if a_int.connected_endpoint_type == 'dcim.interface':
+                    vc = a_int.connected_endpoint.device.virtual_chassis
+                    connected_endpoint = a_int.connected_endpoint
+                else:
+                    for termination in terminations:  # Find the Z side
+                        # Check if the (local or remote) side is a virtual chassis
+                        vc = termination.connected_endpoint.device.virtual_chassis
+                        connected_endpoint = termination.connected_endpoint
+                        # If the side is a VC use the master ID to make sure it's not our local side
+                        # Otherwise use the regular endpoint device_id
+                        if ((vc and (vc.master.id != self.device_id))
+                           or (not vc and (connected_endpoint.device.id != self.device_id))):
+                            # Exit the loop when we find the good termination
+                            break
+                if vc:
+                    # Same as previously, if VC get the hostname from the domain field
+                    z_dev = vc.domain.split('.')[0]
+                else:
+                    z_dev = connected_endpoint.device.name
+                z_int = connected_endpoint.name
+
                 description = "{type}: {z_dev}:{z_int} ({provider}, {details}) {{#{cable_label}}}".format(
                   type=type,
                   z_dev=z_dev,
