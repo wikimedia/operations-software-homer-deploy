@@ -294,7 +294,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                 z_dev = a_int.connected_endpoint.device.name
             z_int = a_int.connected_endpoint.name
             # Set the link type depending on the other side's type
-            core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw']
+            core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
             if a_int.connected_endpoint.device.device_role.slug in core_link_z_dev_types:
                 type = 'Core: '
             else:
