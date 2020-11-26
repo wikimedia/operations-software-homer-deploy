@@ -122,7 +122,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
                 vrrp_ips = {}
                 for ip_address in self.fetch_device_ip_addresses():
-                    if ip_address.interface.name != interface_name:
+                    if ip_address.assigned_object.name != interface_name:
                         # Only care about the IPs for our interface
                         continue
                     if ip_address.role and ip_address.role.value == 'vrrp':
@@ -236,7 +236,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                     # IPs are only configured on sub-interfaces
                     # A bit of a dirty hack just for our infra
                     # Check if the current interface have a subinterface with an IP
-                    if ip_address.interface.name == interface_name:
+                    if ip_address.assigned_object.name == interface_name:
                         interface_config['address'] = ip_address.address
                         jsi['misc'][interface_name] = interface_config
         return jsi
