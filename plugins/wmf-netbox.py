@@ -17,7 +17,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         self._device_interfaces = None
         self._device_ip_addresses = None
         self._circuit_terminations = {}
-        self._device_circuits = {}
+        self._device_circuits = None
         self.device_id = self._device.metadata['netbox_object'].id
 
     def fetch_device_interfaces(self):
@@ -45,13 +45,12 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             dict: A dict of interface:circuit.
 
         """
-        if not self._device_circuits:
+        if self._device_circuits is None:
             # Because of changes documented in https://github.com/netbox-community/netbox/issues/4812
             # if an interface is connected to another device using a circuit, the circuit doesn't show up
             device_id = self._device.metadata['netbox_object'].id
             # Only get the circuits terminating where the device is
             circuits = {}
-
             # We get all the cables connected to a device
             for cable in self._api.dcim.cables.filter(device_id=device_id):
                 # And if one side is a circuit we store it, with the local interface name as key
