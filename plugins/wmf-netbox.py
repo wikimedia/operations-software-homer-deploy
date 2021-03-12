@@ -61,7 +61,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                     circuits[cable.termination_a.name] = self._api.circuits.circuits.get(
                         cable.termination_b.circuit.id)
             self._device_circuits = circuits
-
         return self._device_circuits
 
     def _get_disabled(self) -> Dict[str, List[str]]:
@@ -295,19 +294,24 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             # Set the link type depending on the other side's type
             core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
             if a_int.connected_endpoint.device.device_role.slug in core_link_z_dev_types:
-                type = 'Core: '
+                link_type = 'Core: '
             else:
-                type = ''
-            description = "{type}{z_dev}:{z_int} {{#{cable_label}}}".format(
-                type=type,
+                link_type = ''
+                z_int = ''  # See T277006
+            if cable_label:
+                cable_label = " {{#{}}}".format(cable_label)
+            if z_int:
+                z_int = ":{}".format(z_int)
+            description = "{link_type}{z_dev}{z_int}{cable_label}".format(
+                link_type=link_type,
                 z_dev=z_dev,
                 z_int=z_int,
-                cable_label=cable_label)  # TODO FIX
+                cable_label=cable_label)
             return description
 
         elif a_int.name in circuits:
             # Constant variables regadless of the # of terminations
-            type = circuits[a_int.name].type.name
+            link_type = circuits[a_int.name].type.name
             provider = circuits[a_int.name].provider.name
             cid = circuits[a_int.name].cid
             circuit_description = circuits[a_int.name].description
@@ -322,7 +326,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             # 1 is when we don't care about the Z (remote) side' device (eg. transits, peering)
             # 2 is when we manage both sides (eg. transport)
             if len(terminations) == 1:
-                description = "{type}: {provider} ({details}) {{#{cable_label}}}".format(type=type,
+                description = "{link_type}: {provider} ({details}) {{#{cable_label}}}".format(link_type=link_type,
                                                                                          provider=provider,
                                                                                          details=', '.join(details),
                                                                                          cable_label=cable_label)
@@ -356,8 +360,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                     z_dev = connected_endpoint.device.name
                 z_int = connected_endpoint.name
 
-                description = "{type}: {z_dev}:{z_int} ({provider}, {details}) {{#{cable_label}}}".format(
-                  type=type,
+                description = "{link_type}: {z_dev}:{z_int} ({provider}, {details}) {{#{cable_label}}}".format(
+                  link_type=link_type,
                   z_dev=z_dev,
                   z_int=z_int,
                   provider=provider,
