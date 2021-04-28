@@ -4,6 +4,7 @@ FROM docker-registry.wikimedia.org/python3-build-${DEBIAN_VER}:latest
 RUN apt-get update && \
     apt-get -y --no-install-recommends install build-essential python3-dev \
         libsasl2-dev && \
-    pip3 install --upgrade setuptools
+    python3 -m pip install --upgrade setuptools && \
+    python3 -m pip install --upgrade pip
 
 COPY freeze_requirements.sh /bin/freeze
