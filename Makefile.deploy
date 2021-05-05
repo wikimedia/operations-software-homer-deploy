@@ -3,10 +3,8 @@
 VENV ?= $(CURDIR)/venv
 # The distribution to create the virtualenv for. Auto-detection is the default
 DISTRO ?= $(shell lsb_release -sc)
-# The base path where the deploy repository root is installed
-DEPLOY_PATH ?= $(CURDIR)/deploy
 # Python version
-PYTHON_VERSION ?= $(shell $(VENV)/bin/python -c 'from sys import version_info as v; print("%d.%d" % (v[0], v[1]))')
+PYTHON_VERSION ?= $(shell /usr/bin/python3 -c 'from sys import version_info as v; print("%d.%d" % (v[0], v[1]))')
 # Plugins directory
 HOMER_PLUGINS := $(VENV)/lib/python$(PYTHON_VERSION)/site-packages/homer_plugins
 
