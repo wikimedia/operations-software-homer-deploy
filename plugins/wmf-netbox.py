@@ -100,6 +100,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             interface_config = {}
 
             interface_config['description'] = self.interface_description(interface_name)
+            interface_config['type'] = nb_int.type.value
 
             if nb_int.lag:
                 interface_config['lag'] = nb_int.lag.name
