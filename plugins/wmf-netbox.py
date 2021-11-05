@@ -79,6 +79,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                 jdi['snowflakes'].append(nb_int.name)
             elif nb_int.type.value in SNOWFLAKE_INTERFACE_TYPES:
                 jdi['snowflakes'].append(nb_int.name)
+            elif ":" in nb_int.name: # Breakout cables need their own config stanza
+                jdi['snowflakes'].append(nb_int.name)
             else:  # Everything else are regular interfaces
                 jdi['regular'].append(nb_int.name)
         return jdi
