@@ -9,8 +9,8 @@ dependencies.
 Assuming you have docker installed and your user is able to launch docker
 containers, whenever your requirements change you just need to run
 
+    DEBIAN_VER=bullseye make -f Makefile.build all
     DEBIAN_VER=buster make -f Makefile.build all
-    DEBIAN_VER=stretch make -f Makefile.build all
 
 that will refresh the frozen requirements list re-download the correct wheels,
 rebuild the ones needed, and package them for your next deploy.
