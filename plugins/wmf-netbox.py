@@ -98,6 +98,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             interface_name = nb_int.name
             if interface_name in ignore_interfaces:
                 continue
+            # Ignore VC links
+            if interface_name.startswith('vcp'):
+                continue
             # Regarless of what kind of interface it is, set attributes in a Juniper-ish tree
             interface_config = {}
 
