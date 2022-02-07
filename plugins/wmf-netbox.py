@@ -20,6 +20,11 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         self._device_circuits = None
         self.device_id = self._device.metadata['netbox_object'].id
 
+        if 'evpn' in self._device.config:
+            self._evpn = self._device.config['evpn']
+        else:
+            self._evpn = False
+
     def fetch_device_interfaces(self):
         """Fetch interfaces from Netbox."""
         if not self._device_interfaces:
@@ -125,25 +130,33 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                 # assumes there is v4 for everything
                 interface_config['ips'] = {4: {}, 6: {}}
 
-                vrrp_ips = {}
+                virt_ips = {}
                 for ip_address in self.fetch_device_ip_addresses():
                     if ip_address.assigned_object.name != interface_name:
                         # Only care about the IPs for our interface
                         continue
-                    if ip_address.role and ip_address.role.value == 'vrrp':
-                        # If we're dealing with a vrrp IP, keep it on the side to later on make it a child
+                    if ip_address.role:
+                        # If we're dealing with a virtual IP, keep it on the side to later on make it a child
                         # of the real interface IP
-                        vrrp_ips[ip_address.address] = ip_address.custom_fields['group_id']
-                        continue
+                        if ip_address.role.value == 'vrrp':
+                            virt_ips[ip_address.address] = ip_address.custom_fields['group_id']
+                            continue
+                        if ip_address.role.value == 'anycast':
+                            virt_ips[ip_address.address] = None
+                            continue
                     interface_config['ips'][ip_address.family.value][ip_interface(ip_address.address)] = {}
 
-                # Now assign any VRRP IP to the real interface,
+                # Now assign any VRRP/Anycast IP to the real interface,
                 # for that we need to find IPs belonging in the same subnet
                 for family, int_ips in interface_config['ips'].items():
                     for int_ip in int_ips.keys():
-                        for vrrp_ip, vrrp_group in vrrp_ips.items():
-                            if ip_interface(vrrp_ip) in int_ip.network:
-                                interface_config['ips'][family][int_ip]['vrrp'] = {ip_interface(vrrp_ip).ip: vrrp_group}
+                        for virt_ip, vrrp_group in virt_ips.items():
+                            if ip_interface(virt_ip) in int_ip.network:
+                                if vrrp_group or vrrp_group == 0:
+                                    interface_config['ips'][family][int_ip]['vrrp'] = {ip_interface(virt_ip).ip: vrrp_group}
+                                else:
+                                    interface_config['ips'][family][int_ip]['anycast'] = ip_interface(virt_ip).ip
+                                    interface_config['anycast_gw'] = True
 
             # Now that we have all the interface or sub-interface attribute,
             # we need to nest the sub interfaces in the interfaces when needed
@@ -256,6 +269,36 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
     # Else try to find the parent interface description
     # Else generate the description based on cabling (remove host, etc) of the parent interface
     # Else return empty string
+
+    def _get_underlay_ints(self) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Returns a list of interface names belonging to the underlay that require OSPF.
+
+        Returns:
+            list: a list of interface names.
+            None: the device is not part of an underlay switch fabric requiring OSFP.
+
+        """
+        if 'evpn' not in self._device.config:
+            return None
+
+        underlay_ints = {}
+        device_id = self._device.metadata['netbox_object'].id
+        device_ints = self._api.dcim.interfaces.filter(device_id=device_id)
+        for interface in device_ints:
+            ips = self._api.ipam.ip_addresses.filter(interface_id=interface.id)
+            if ips and interface.connected_endpoint:
+                if interface.connected_endpoint.device.device_role.slug == 'asw':
+                    far_side_loopback_int = self._api.dcim.interfaces.get(
+                        device_id=interface.connected_endpoint.device.id,
+                        name="lo0")
+                    far_side_loopback_ip = self._api.ipam.ip_addresses.get(interface_id=far_side_loopback_int.id)
+                    underlay_ints[interface.name] = {
+                        "device": interface.connected_endpoint.device.name,
+                        "ip": ip_interface(far_side_loopback_ip).ip
+                    }
+
+        return underlay_ints
+
     def interface_description(self, interface_name: str):
         """Generate an interface description based on multiple factors (remote endpoint, Netbox description, etc)."""
         description = None
@@ -299,6 +342,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             z_int = a_int.connected_endpoint.name
             # Set the link type depending on the other side's type
             core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
+
             if a_int.connected_endpoint.device.device_role.slug in core_link_z_dev_types:
                 link_type = 'Core: '
             else:
