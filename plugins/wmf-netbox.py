@@ -161,7 +161,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             # If we have the parent interface but we found a sub interface earlier
             elif '.' not in interface_name and interface_name in jri:
                 # Merge the new stuff with the existing one
-                jri[interface_name] = {**jri[parent], **interface_config}
+                jri[interface_name].update(interface_config)
             # Easiest case, we find the parent interface first
             elif '.' not in interface_name and interface_name not in jri:
                 jri[interface_name] = interface_config
