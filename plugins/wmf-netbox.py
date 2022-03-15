@@ -282,9 +282,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             return None
 
         underlay_ints = {}
-        device_id = self._device.metadata['netbox_object'].id
-        device_ints = self._api.dcim.interfaces.filter(device_id=device_id)
-        for interface in device_ints:
+        for interface in self.fetch_device_interfaces():
             ips = self._api.ipam.ip_addresses.filter(interface_id=interface.id)
             if ips and interface.connected_endpoint:
                 if interface.connected_endpoint.device.device_role.slug == 'asw':
