@@ -304,7 +304,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         #    - A provider
         cable_label = a_int.cable.label
         # We get the list of circuits connected to the device, key = local interface name
-        if a_int.cable_peer_type == 'dcim.interface':
+        if a_int.cable_peer_type in ('dcim.interface', 'dcim.frontport'):
             if a_int.connected_endpoint.device.virtual_chassis:
                 # In VCs we use its virtual name stored in the domain field
                 # And only keep the host part
