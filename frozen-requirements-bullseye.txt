@@ -4,7 +4,7 @@ capirca==2.0.4
 certifi==2021.10.8
 cffi==1.15.0
 charset-normalizer==2.0.12
-cryptography==36.0.2
+cryptography==37.0.0
 idna==3.3
 ipaddress==1.0.23
 Jinja2==3.1.1
