@@ -307,18 +307,18 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         #    - A provider
         cable_label = a_int.cable.label
         # We get the list of circuits connected to the device, key = local interface name
-        if a_int.cable_peer_type in ('dcim.interface', 'dcim.frontport'):
-            if a_int.connected_endpoint.device.virtual_chassis:
+        if a_int.link_peer_type in ('dcim.interface', 'dcim.frontport'):
+            if a_int.link_peer.device.virtual_chassis:
                 # In VCs we use its virtual name stored in the domain field
                 # And only keep the host part
-                z_dev = a_int.connected_endpoint.device.virtual_chassis.domain.split('.')[0]
+                z_dev = a_int.link_peer.device.virtual_chassis.domain.split('.')[0]
             else:
-                z_dev = a_int.connected_endpoint.device.name
-            z_int = a_int.connected_endpoint.name
+                z_dev = a_int.link_peer.device.name
+            z_int = a_int.link_peer.name
             # Set the link type depending on the other side's type
             core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
 
-            if a_int.connected_endpoint.device.device_role.slug in core_link_z_dev_types:
+            if a_int.link_peer.device.device_role.slug in core_link_z_dev_types:
                 link_type = 'Core: '
             else:
                 link_type = ''
@@ -330,13 +330,13 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             description = f"{link_type}{z_dev}{z_int}{cable_label}"
             return prefix + description
 
-        elif a_int.cable_peer_type == 'circuits.circuittermination':
+        elif a_int.link_peer_type == 'circuits.circuittermination':
             # Constant variables regadless of the # of terminations
-            link_type = a_int.connected_endpoint.circuit.type.name
-            provider = a_int.connected_endpoint.circuit.provider.name
-            cid = a_int.connected_endpoint.circuit.cid
-            circuit_description = a_int.connected_endpoint.circuit.description
-            terminations = self.fetch_circuit_terminations(a_int.connected_endpoint.circuit.id)
+            link_type = a_int.link_peer.circuit.type.name
+            provider = a_int.link_peer.circuit.provider.name
+            cid = a_int.link_peer.circuit.cid
+            circuit_description = a_int.link_peer.circuit.description
+            terminations = self.fetch_circuit_terminations(a_int.link_peer.circuit.id)
             details = []
             if cid:
                 details.append(cid)
@@ -349,33 +349,26 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             if len(terminations) == 1:
                 description = f"{link_type}: {provider} ({', '.join(details)}) {{#{cable_label}}}"
             elif len(terminations) == 2:
-                # There is curently an upstream issue where the remote endpoint will either be defined as
-                # circuit termination endpoint, or as interface remote endpoint, which are both mutually
-                # exclusive.
-                # https://github.com/netbox-community/netbox/issues/4812
-                # https://github.com/netbox-community/netbox/issues/4925
-                # TODO: It will most likely need to be refactored/cleaned up when everything is fixed upstream
-
-                if a_int.connected_endpoint_type == 'dcim.interface':
-                    vc = a_int.connected_endpoint.device.virtual_chassis
-                    connected_endpoint = a_int.connected_endpoint
+                if a_int.link_peer_type == 'dcim.interface':
+                    vc = a_int.link_peer.device.virtual_chassis
+                    link_peer = a_int.link_peer
                 else:
                     for termination in terminations:  # Find the Z side
                         # Check if the (local or remote) side is a virtual chassis
-                        vc = termination.connected_endpoint.device.virtual_chassis
-                        connected_endpoint = termination.connected_endpoint
+                        vc = termination.link_peer.device.virtual_chassis
+                        link_peer = termination.link_peer
                         # If the side is a VC use the master ID to make sure it's not our local side
                         # Otherwise use the regular endpoint device_id
                         if ((vc and (vc.master.id != self.device_id))
-                           or (not vc and (connected_endpoint.device.id != self.device_id))):
+                           or (not vc and (link_peer.device.id != self.device_id))):
                             # Exit the loop when we find the good termination
                             break
                 if vc:
                     # Same as previously, if VC get the hostname from the domain field
                     z_dev = vc.domain.split('.')[0]
                 else:
-                    z_dev = connected_endpoint.device.name
-                z_int = connected_endpoint.name
+                    z_dev = link_peer.device.name
+                z_int = link_peer.name
 
                 description = f"{link_type}: {z_dev}:{z_int} ({provider}, {', '.join(details)}) {{#{cable_label}}}"
             return prefix + description
