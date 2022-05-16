@@ -384,11 +384,12 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         """Return the MTU to use on a given interface."""
         mtu = None
         for nb_int in self.fetch_device_interfaces():
-            if nb_int.name == interface_name and nb_int.mtu:
+            if nb_int.name == interface_name and nb_int.enabled and nb_int.mtu:
                 # Exact match found
                 return nb_int.mtu
-            if '.' in interface_name and interface_name.split('.')[0] == nb_int.name and nb_int.mtu:
+            if '.' in interface_name and interface_name.split('.')[0] == nb_int.name and nb_int.mtu and nb_int.enabled:
                 # Parent interface found and it have an MTU!
                 mtu = nb_int.mtu
         # Wait to be done iterating over all the device' interfaces
+        # in case an exact match is found after the parent
         return mtu
