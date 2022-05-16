@@ -321,14 +321,10 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                 link_type = ''
                 z_int = ''  # See T277006
             if cable_label:
-                cable_label = " {{#{}}}".format(cable_label)
+                cable_label = f" {{#{cable_label}}}"
             if z_int:
-                z_int = ":{}".format(z_int)
-            description = "{link_type}{z_dev}{z_int}{cable_label}".format(
-                link_type=link_type,
-                z_dev=z_dev,
-                z_int=z_int,
-                cable_label=cable_label)
+                z_int = f":{z_int}"
+            description = f"{link_type}{z_dev}{z_int}{cable_label}"
             return description
 
         elif a_int.cable_peer_type == 'circuits.circuittermination':
@@ -348,11 +344,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             # 1 is when we don't care about the Z (remote) side' device (eg. transits, peering)
             # 2 is when we manage both sides (eg. transport)
             if len(terminations) == 1:
-                description = "{link_type}: {provider} ({details}) {{#{cable_label}}}".format(link_type=link_type,
-                                                                                              provider=provider,
-                                                                                              details=', '.join(details),
-                                                                                              cable_label=cable_label)
-
+                description = f"{link_type}: {provider} ({', '.join(details)}) {{#{cable_label}}}"
             elif len(terminations) == 2:
                 # There is curently an upstream issue where the remote endpoint will either be defined as
                 # circuit termination endpoint, or as interface remote endpoint, which are both mutually
@@ -382,13 +374,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                     z_dev = connected_endpoint.device.name
                 z_int = connected_endpoint.name
 
-                description = "{link_type}: {z_dev}:{z_int} ({provider}, {details}) {{#{cable_label}}}".format(
-                              link_type=link_type,
-                              z_dev=z_dev,
-                              z_int=z_int,
-                              provider=provider,
-                              details=', '.join(details),
-                              cable_label=cable_label)
+                description = f"{link_type}: {z_dev}:{z_int} ({provider}, {', '.join(details)}) {{#{cable_label}}}"
             return description
 
     # If the specific (sub)interface has a non default MTU: return that
