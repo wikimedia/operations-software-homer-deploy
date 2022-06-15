@@ -37,12 +37,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             self._device_ip_addresses = self._api.ipam.ip_addresses.filter(device_id=self.device_id)
         return self._device_ip_addresses
 
-    def fetch_circuit_terminations(self, circuit_id: int):
-        """Fetch circuit terminations from Netbox."""
-        if circuit_id not in self._circuit_terminations:
-            self._circuit_terminations[circuit_id] = self._api.circuits.circuit_terminations.filter(circuit_id=circuit_id)
-        return self._circuit_terminations[circuit_id]
-
     def _get_disabled(self) -> Dict[str, List[str]]:
         """Expose disabled interfaces in a way that can be efficiently used by the templates."""
         # Junos doesn't accept all kind of interfaces as disabled. Some filtering is needed.
@@ -331,46 +325,27 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             return prefix + description
 
         elif a_int.link_peer_type == 'circuits.circuittermination':
-            # Constant variables regadless of the # of terminations
+            # Variables needed regardless of the types of circuits
             link_type = a_int.link_peer.circuit.type.name
             provider = a_int.link_peer.circuit.provider.name
             cid = a_int.link_peer.circuit.cid
             circuit_description = a_int.link_peer.circuit.description
-            terminations = self.fetch_circuit_terminations(a_int.link_peer.circuit.id)
             details = []
             if cid:
                 details.append(cid)
             if circuit_description:
                 details.append(circuit_description)
-            # A circuit can have 0, 1, or 2 terminations
-            # 0 is not possible here as we already have a_dev/a_int
-            # 1 is when we don't care about the Z (remote) side' device (eg. transits, peering)
-            # 2 is when we manage both sides (eg. transport)
-            if len(terminations) == 1:
-                description = f"{link_type}: {provider} ({', '.join(details)}) {{#{cable_label}}}"
-            elif len(terminations) == 2:
-                if a_int.link_peer_type == 'dcim.interface':
-                    vc = a_int.link_peer.device.virtual_chassis
-                    link_peer = a_int.link_peer
-                else:
-                    for termination in terminations:  # Find the Z side
-                        # Check if the (local or remote) side is a virtual chassis
-                        vc = termination.link_peer.device.virtual_chassis
-                        link_peer = termination.link_peer
-                        # If the side is a VC use the master ID to make sure it's not our local side
-                        # Otherwise use the regular endpoint device_id
-                        if ((vc and (vc.master.id != self.device_id))
-                           or (not vc and (link_peer.device.id != self.device_id))):
-                            # Exit the loop when we find the good termination
-                            break
-                if vc:
-                    # Same as previously, if VC get the hostname from the domain field
-                    z_dev = vc.domain.split('.')[0]
-                else:
-                    z_dev = link_peer.device.name
-                z_int = link_peer.name
 
+            # If the circuit doesn't have an endpoint or is connected to a provider network
+            # Which mean we don't manage the remote side
+            if not a_int.connected_endpoint or a_int.connected_endpoint_type == 'circuits.providernetwork':
+                description = f"{link_type}: {provider} ({', '.join(details)}) {{#{cable_label}}}"
+
+            else:  # We manage the remote side
+                z_dev = a_int.connected_endpoint.device.name
+                z_int = a_int.connected_endpoint.name
                 description = f"{link_type}: {z_dev}:{z_int} ({provider}, {', '.join(details)}) {{#{cable_label}}}"
+
             return prefix + description
 
     # If the specific (sub)interface has a non default MTU: return that
