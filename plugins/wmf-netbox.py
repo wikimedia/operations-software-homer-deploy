@@ -268,7 +268,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
     def interface_description(self, interface_name: str):
         """Generate an interface description based on multiple factors (remote endpoint, Netbox description, etc)."""
-        description = None
+        description = ''
         prefix = ''
         a_int = None  # A (local) side interface of a cable
         for nb_int in self.fetch_device_interfaces():
@@ -304,24 +304,26 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
         # b_int is either the patch panel interface facing out or the initial interface
         # if no patch panel
-        if a_int.link_peer_type == 'dcim.frontport':
-            # If the patch panel isn't patched through
-            b_int = a_int.link_peer.rear_port if a_int.link_peer.rear_port else a_int
+        if a_int.link_peer_type == 'dcim.frontport' and a_int.link_peer.rear_port:
+            b_int = a_int.link_peer.rear_port
         else:
+            # If the patch panel isn't patched through
             b_int = a_int
-        # keep dcim.frontport below in case the path stops at the patch panel
-        if b_int.link_peer_type in ('dcim.interface', 'dcim.frontport'):
-            if b_int.link_peer.device.virtual_chassis:
+        # keep dcim.frontport or rear port below for the cases where patch panels are chained.
+        # This doesn't handle all the imaginable cases (eg. chaining patch panels and circuits)
+        # But handles all our infra cases. To be expanded as needed.
+        if b_int.link_peer_type in ('dcim.interface', 'dcim.frontport', 'dcim.rearport'):
+            if a_int.connected_endpoint.device.virtual_chassis:
                 # In VCs we use its virtual name stored in the domain field
                 # And only keep the host part
-                z_dev = b_int.link_peer.device.virtual_chassis.domain.split('.')[0]
+                z_dev = a_int.connected_endpoint.device.virtual_chassis.domain.split('.')[0]
             else:
-                z_dev = b_int.link_peer.device.name
-            z_int = b_int.link_peer.name
+                z_dev = a_int.connected_endpoint.device.name
+            z_int = a_int.connected_endpoint.name
             # Set the link type depending on the other side's type
             core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
 
-            if b_int.link_peer.device.device_role.slug in core_link_z_dev_types:
+            if a_int.connected_endpoint.device.device_role.slug in core_link_z_dev_types:
                 link_type = 'Core: '
             else:
                 link_type = ''
@@ -331,7 +333,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             if z_int:
                 z_int = f":{z_int}"
             description = f"{link_type}{z_dev}{z_int}{cable_label}"
-            return prefix + description
         if b_int.link_peer_type == 'circuits.circuittermination':
             # Variables needed regardless of the types of circuits
             link_type = b_int.link_peer.circuit.type.name
@@ -355,7 +356,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                 z_int = a_int.connected_endpoint.name
                 description = f"{link_type}: {z_dev}:{z_int} ({provider}, {', '.join(details)}) {{#{cable_label}}}"
 
-            return prefix + description
+        return prefix + description
+
 
     # If the specific (sub)interface has a non default MTU: return that
     # Else try to find the parent interface MTU
