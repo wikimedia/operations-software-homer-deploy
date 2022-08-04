@@ -269,14 +269,13 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
     def interface_description(self, interface_name: str):
         """Generate an interface description based on multiple factors (remote endpoint, Netbox description, etc)."""
         description = ''
-        prefix = ''
         a_int = None  # A (local) side interface of a cable
         for nb_int in self.fetch_device_interfaces():
             if nb_int.name == interface_name:  # If we have an exact interface match
                 if not nb_int.enabled:
-                    prefix = 'DISABLED '
+                    return 'DISABLED'
                 if nb_int.description:  # Return description if any
-                    return prefix + nb_int.description
+                    return nb_int.description
                 elif nb_int.cable:  # Or if it's connected, save the interface for later
                     a_int = nb_int
                     break
@@ -287,11 +286,11 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                     a_int = nb_int
         # Only return the parent description once we're sure there is no exact match with a description
         if description:
-            return prefix + description
+            return description
 
         # If really found nothing, return it
         if not a_int:
-            return prefix.strip()
+            return ''
 
         # Now we can focus on finding the Z side, and there are different scenarios
         # An interface can be connected (using a cable) to:
@@ -356,7 +355,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                 z_int = a_int.connected_endpoint.name
                 description = f"{link_type}: {z_dev}:{z_int} ({provider}, {', '.join(details)}) {{#{cable_label}}}"
 
-        return prefix + description
+        return description
 
 
     # If the specific (sub)interface has a non default MTU: return that
