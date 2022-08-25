@@ -250,7 +250,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             if nb_int.count_ipaddresses > 0:
                 # assumes there is v4 for everything
                 interface_config['ips'] = {4: {}, 6: {}}
-
                 virt_ips = {}
                 for ip_address in self.fetch_device_ip_addresses():
                     if ip_address.assigned_object.name != interface_name:
@@ -266,6 +265,12 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                             virt_ips[ip_address.address] = None
                             continue
                     interface_config['ips'][ip_address.family.value][ip_interface(ip_address.address)] = {}
+
+                # Assume that interfaces with FHRP IPs will always have "real" IPs
+                if nb_int.count_fhrp_groups > 0:
+                    for fhrp_assignment in self._api.ipam.fhrp_group_assignments.filter(interface_id=nb_int.id):
+                        for ip_addresses in fhrp_assignment.group.ip_addresses:
+                            virt_ips[ip_addresses.address] = fhrp_assignment.group.group_id
 
                 # Now assign any VRRP/Anycast IP to the real interface,
                 # for that we need to find IPs belonging in the same subnet
