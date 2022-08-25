@@ -79,6 +79,40 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
         return underlay_ints
 
+    def _get_port_block_speeds(self) -> Optional[Dict[int, int]]:
+        """Returns a dict keyed by first port ID of every block of 4 ports and speed for QFX5120-48Y
+
+        Returns:
+            dict: dict keyed by first portd ID of every block of 4 with values representing speed
+            None: the device is not a QFX5120-48Y model and we thus don't have to consider ports in groups
+        """
+        if self._device.metadata['type'] != 'qfx5120-48y-8c':
+            return None
+
+        port_blocks = {}
+        for interface in self.fetch_device_interfaces():
+            if interface.type.value == 'virtual' or interface.mgmt_only:
+                continue
+
+            port = int(interface.name.split(':')[0].split('/')[-1])
+            if port >= 48:
+                continue
+
+            block = port - (port % 4)
+            if interface.type.value.startswith('1000base'):
+                speed = 1
+            else:
+                speed = int(interface.type.value.split('gbase')[0])
+
+            if block not in port_blocks:
+                port_blocks[block] = speed
+            elif port_blocks[block] != speed:
+                # Return none if invalid combo, resulting in generated config without pic 0
+                # stanza. This prevents an error in Netbox changing working config.
+                return None
+
+        return port_blocks
+
     def interface_description(self, interface_name: str):
         """Generate an interface description based on multiple factors (remote endpoint, Netbox description, etc)."""
         description = ''
