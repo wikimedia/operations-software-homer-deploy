@@ -16,8 +16,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         super().__init__(netbox_api, device)
         self._device_interfaces = None
         self._device_ip_addresses = None
-        self._circuit_terminations = {}
-        self._device_circuits = None
         self.device_id = self._device.metadata['netbox_object'].id
 
         if 'evpn' in self._device.config:
@@ -28,13 +26,15 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
     def fetch_device_interfaces(self):
         """Fetch interfaces from Netbox."""
         if not self._device_interfaces:
-            self._device_interfaces = self._api.dcim.interfaces.filter(device_id=self.device_id)
+            # Consume the generator or it will be empty if looped more than once.
+            self._device_interfaces = list(self._api.dcim.interfaces.filter(device_id=self.device_id))
         return self._device_interfaces
 
     def fetch_device_ip_addresses(self):
         """Fetch IPs from Netbox."""
         if not self._device_ip_addresses:
-            self._device_ip_addresses = self._api.ipam.ip_addresses.filter(device_id=self.device_id)
+            # Consume the generator or it will be empty if looped more than once.
+            self._device_ip_addresses = list(self._api.ipam.ip_addresses.filter(device_id=self.device_id))
         return self._device_ip_addresses
 
     # We have to specify in the Junos chassis stanza how many LAG interfaces we want to provision
@@ -61,7 +61,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
         underlay_ints = {}
         for interface in self.fetch_device_interfaces():
-            ips = self._api.ipam.ip_addresses.filter(interface_id=interface.id)
+            # Consume the generator or it will be empty if looped more than once.
+            ips = list(self._api.ipam.ip_addresses.filter(interface_id=interface.id))
             if ips and interface.connected_endpoint:
                 if interface.connected_endpoint.device.device_role.slug == 'asw':
                     far_side_loopback_int = self._api.dcim.interfaces.get(
