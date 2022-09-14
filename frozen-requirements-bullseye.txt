@@ -1,11 +1,11 @@
 absl-py==1.2.0
 bcrypt==4.0.0
 capirca==2.0.6
-certifi==2022.6.15.1
+certifi==2022.6.15.2
 cffi==1.15.1
 charset-normalizer==2.1.1
 cryptography==38.0.1
-idna==3.3
+idna==3.4
 ipaddress==1.0.23
 Jinja2==3.1.2
 junos-eznc==2.6.5
