@@ -293,9 +293,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                     if ip_address.role:
                         # If we're dealing with a virtual IP, keep it on the side to later on make it a child
                         # of the real interface IP
-                        if ip_address.role.value == 'vrrp':
-                            virt_ips[ip_address.address] = ip_address.custom_fields['group_id']
-                            continue
                         if ip_address.role.value == 'anycast':
                             virt_ips[ip_address.address] = None
                             continue
