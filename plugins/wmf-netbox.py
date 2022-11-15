@@ -59,20 +59,10 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         if 'evpn' not in self._device.config:
             return None
 
-        underlay_ints = {}
+        underlay_ints = []
         for interface in self.fetch_device_interfaces():
-            # Consume the generator or it will be empty if looped more than once.
-            ips = list(self._api.ipam.ip_addresses.filter(interface_id=interface.id))
-            if ips and interface.connected_endpoint:
-                if interface.connected_endpoint.device.device_role.slug == 'asw':
-                    far_side_loopback_int = self._api.dcim.interfaces.get(
-                        device_id=interface.connected_endpoint.device.id,
-                        name="lo0")
-                    far_side_loopback_ip = self._api.ipam.ip_addresses.get(interface_id=far_side_loopback_int.id)
-                    underlay_ints[interface.name] = {
-                        "device": interface.connected_endpoint.device.name,
-                        "ip": ip_interface(far_side_loopback_ip).ip
-                    }
+            if interface.enabled and interface.count_ipaddresses and not interface.vrf and not interface.mgmt_only:
+                underlay_ints.append(interface.name)
 
         return underlay_ints
 
