@@ -48,13 +48,26 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
     # Else generate the description based on cabling (remove host, etc) of the parent interface
     # Else return empty string
 
+    def _get_vrfs(self) -> Optional[Dict[str, Dict[str, Any]]]:
+        """ Gets VRFs that need to be configured by iterating over device interfaces
+
+        Returns:
+            dict: keyed by vrf name, with values of Netbox RD and list of member interfaces
+        """
+        vrfs = defaultdict(lambda: defaultdict(list))
+        for interface in self.fetch_device_interfaces():
+            if interface.vrf:
+                vrfs[interface.vrf.name]['ints'].append(interface.name)
+                vrfs[interface.vrf.name]['id'] = interface.vrf.rd
+
+        return vrfs
+
     def _get_underlay_ints(self) -> Optional[Dict[str, Dict[str, Any]]]:
         """Returns a list of interface names belonging to the underlay that require OSPF.
 
         Returns:
             list: a list of interface names.
             None: the device is not part of an underlay switch fabric requiring OSFP.
-
         """
         if 'evpn' not in self._device.config:
             return None
