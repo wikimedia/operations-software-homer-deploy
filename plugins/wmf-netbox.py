@@ -43,11 +43,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         """Expose how may LAG interface we need instanciated (includind disabled)."""
         return sum(1 for nb_int in self.fetch_device_interfaces() if nb_int.type.value == 'lag')
 
-    # If the specific (sub)interface has a description: return that
-    # Else try to find the parent interface description
-    # Else generate the description based on cabling (remove host, etc) of the parent interface
-    # Else return empty string
-
     def _get_vrfs(self) -> Optional[defaultdict[defaultdict, defaultdict]]:
         """ Gets VRFs that need to be configured by iterating over device interfaces
 
@@ -113,31 +108,100 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
         return port_blocks
 
-    def interface_description(self, interface_name: str):
-        """Generate an interface description based on multiple factors (remote endpoint, Netbox description, etc)."""
-        description = ''
-        a_int = None  # A (local) side interface of a cable
-        for nb_int in self.fetch_device_interfaces():
-            if nb_int.name == interface_name:  # If we have an exact interface match
-                if not nb_int.enabled:
-                    return 'DISABLED'
-                if nb_int.description:  # Return description if any
-                    return nb_int.description
-                elif nb_int.cable:  # Or if it's connected, save the interface for later
-                    a_int = nb_int
-                    break
-            elif '.' in interface_name and interface_name.split('.')[0] == nb_int.name:  # Parent interface found
-                if nb_int.description:  # and it has a description!
-                    description = nb_int.description
-                elif nb_int.cable:  # If it's connected, store it for later
-                    a_int = nb_int
-        # Only return the parent description once we're sure there is no exact match with a description
-        if description:
-            return description
+    def interface_description(self, intconf):
+        """ Generates interface description based on data in the 'intconf' dict, which gets
+            created by get_link_data() based on various Netbox elements.
 
-        # If really found nothing, return it
+            Returns:
+                str: interface description for network device, if the intconf data means we
+                     don't need a custom description returns an empty string.
+        """
+
+        if not intconf['enabled']:
+            return "DISABLED"
+
+        if intconf['nb_int_desc']:
+            # Custom description from Netbox descrtiption field
+            return intconf['nb_int_desc']
+
+        if intconf['circuit_id']:
+            # Link connects to a third party circuit
+            cct_desc = f"{intconf['circuit_id']} {intconf.get('circuit_desc', '')}".strip()
+            if intconf['wmf_z_end']:
+                # Typically transport circuit
+                return f"{intconf['link_type']}: {intconf['z_dev']}:{intconf['z_int']} ({intconf['provider']}, " \
+                    f"{cct_desc}) {{#{intconf['cable_label']}}}"
+            # Typically transit circuit
+            return f"{intconf['link_type']}: {intconf['provider']} ({cct_desc}) {{#{intconf['cable_label']}}}"
+
+        if intconf['z_dev']:
+            # Direct link between two WMF devices
+            if intconf['link_type']:
+                # Typically 'core' link between two network devices
+                return f"{intconf['link_type']}: {intconf['z_dev']}:{intconf['z_int']} {{#{intconf['cable_label']}}}"
+            if intconf['cable_label']:
+                # Typically server connection
+                return f"{intconf['z_dev']} {{#{intconf['cable_label']}}}"
+            return f"{intconf['z_dev']}"
+
+        return ''
+
+    def _get_link_data(self, nb_interface):
+        """Returns a dict with additional link_data about interface based on multiple factors (remote endpoint,
+           Netbox description, etc.)  Logic copied from previous get_int_description() function, but builds a
+           dict of parameters instead of a single string.
+
+           Returns:
+               dict: dict with the following information relating to the interface:
+                       enabled: whether interface is enabled in Netbox
+                       nb_int_desc: the interface description field from Netbox (default: None)
+                       circuit_id: the circuit id of the connected circuit (default: None)
+                       circuit_desc: the circuit description if present (default: empty string)
+                       link_type: WMF link 'type' where needed, i.e. Core/Transit/Transpot (default: empty string)
+                       z_dev: name of the device the interface connects to (default: empty string)
+                       z_int: name of interface where the connection lands on connected device (default: empty string)
+                       wmf_z_end: boolean indicating if the z_end device is a node managed by WMF (default: True)
+                       upstream_speed: sub-rated peak speed of connected service/circuit if lower than line rate,
+                                       taken from the 'upstream_speed' attribute of the cct termination (default: None)
+        """
+        link_data = {
+            "enabled": True,
+            "nb_int_desc": None,
+            "circuit_id": None,
+            "circuit_desc": '',
+            "link_type": '',
+            "z_dev": '',
+            "z_int": '',
+            "wmf_z_end": True,
+            "upstream_speed": None
+        }
+
+        # If the interface is disabled record that and return, other info irrelevant
+        if not nb_interface.enabled:
+            link_data['enabled'] = False
+            return link_data
+
+        # If Netbox has a description record that in link_data
+        if nb_interface.description:
+            link_data['nb_int_desc'] = nb_interface.description
+
+        # Set a_int to nb interface object of the near-side of the cable
+        a_int = None
+        if nb_interface.cable:
+            a_int = nb_interface
+        else:
+            # Try to find parent interface based on name
+            for nb_int in self.fetch_device_interfaces():
+                if '.' in nb_interface.name and nb_interface.name.split('.')[0] == nb_int.name:
+                    if nb_int.cable:  # If it's connected, we use that as a_int
+                        a_int = nb_int
+                    if not link_data['nb_int_desc'] and nb_int.description:
+                        # Set sub-int description to parent's netbox description if it has none of its own
+                        link_data['nb_int_desc'] = nb_int.description
+
+        # If a_int not set, i.e. no connection, return here as rest of info based on what's connected
         if not a_int:
-            return ''
+            return link_data
 
         # Now we can focus on finding the Z side, and there are different scenarios
         # An interface can be connected (using a cable) to:
@@ -146,7 +210,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         #    - A device's interface (via another cable)
         #    - A provider
         # - A patch panel (frontport), in that case traverse it first
-        cable_label = a_int.cable.label
+        link_data['cable_label'] = a_int.cable.label
 
         # b_int is either the patch panel interface facing out or the initial interface
         # if no patch panel
@@ -162,47 +226,32 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             if a_int.connected_endpoint.device.virtual_chassis:
                 # In VCs we use its virtual name stored in the domain field
                 # And only keep the host part
-                z_dev = a_int.connected_endpoint.device.virtual_chassis.domain.split('.')[0]
+                link_data['z_dev'] = a_int.connected_endpoint.device.virtual_chassis.domain.split('.')[0]
             else:
-                z_dev = a_int.connected_endpoint.device.name
-            z_int = a_int.connected_endpoint.name
+                link_data['z_dev'] = a_int.connected_endpoint.device.name
+            link_data['z_int'] = a_int.connected_endpoint.name
             # Set the link type depending on the other side's type
             core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
 
             if a_int.connected_endpoint.device.device_role.slug in core_link_z_dev_types:
-                link_type = 'Core: '
-            else:
-                link_type = ''
-                z_int = ''  # See T277006
-            if cable_label:
-                cable_label = f" {{#{cable_label}}}"
-            if z_int:
-                z_int = f":{z_int}"
-            description = f"{link_type}{z_dev}{z_int}{cable_label}"
+                link_data['link_type'] = 'Core'
+
         if b_int.link_peer_type == 'circuits.circuittermination':
             # Variables needed regardless of the types of circuits
-            link_type = b_int.link_peer.circuit.type.name
-            provider = b_int.link_peer.circuit.provider.name
-            cid = b_int.link_peer.circuit.cid
-            circuit_description = b_int.link_peer.circuit.description
-            details = []
-            if cid:
-                details.append(cid)
-            if circuit_description:
-                details.append(circuit_description)
+            link_data['link_type'] = b_int.link_peer.circuit.type.name
+            link_data['provider'] = b_int.link_peer.circuit.provider.name
+            link_data['circuit_id'] = b_int.link_peer.circuit.cid
+            link_data['circuit_desc'] = b_int.link_peer.circuit.description
+            if b_int.link_peer.circuit.termination_z:
+                link_data['upstream_speed'] = b_int.link_peer.circuit.termination_z.upstream_speed
 
-            # If the circuit doesn't have an endpoint or is connected to a provider network
-            # Which mean we don't manage the remote side
-            # note that only far ends of a path have "connected_endpoint" so using it on "a_int"
             if not a_int.connected_endpoint or a_int.connected_endpoint_type == 'circuits.providernetwork':
-                description = f"{link_type}: {provider} ({', '.join(details)}) {{#{cable_label}}}"
+                link_data['wmf_z_end'] = False
+            else:
+                link_data['z_dev'] = a_int.connected_endpoint.device.name
+                link_data['z_int'] = a_int.connected_endpoint.name
 
-            else:  # We manage the remote side
-                z_dev = a_int.connected_endpoint.device.name
-                z_int = a_int.connected_endpoint.name
-                description = f"{link_type}: {z_dev}:{z_int} ({provider}, {', '.join(details)}) {{#{cable_label}}}"
-
-        return description
+        return link_data
 
     # If the specific (sub)interface has a non default MTU: return that
     # Else try to find the parent interface MTU
@@ -239,8 +288,10 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             # Ignore VC links
             if interface_name.startswith('vcp'):
                 continue
+            interface_config.update(self._get_link_data(nb_int))
 
-            interface_config['description'] = self.interface_description(interface_name)
+            interface_config['description'] = self.interface_description(interface_config)
+
             interface_config['type'] = nb_int.type.value
 
             if nb_int.lag:
