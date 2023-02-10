@@ -1,7 +1,7 @@
 """Netbox gathering functions tailored to the WMF needs"""
 
 from collections import defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Any, DefaultDict, Dict, Optional
 
 from ipaddress import ip_interface
 
@@ -48,13 +48,13 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
     # Else generate the description based on cabling (remove host, etc) of the parent interface
     # Else return empty string
 
-    def _get_vrfs(self) -> Optional[Dict[str, Dict[str, Any]]]:
+    def _get_vrfs(self) -> Optional[defaultdict[defaultdict, defaultdict]]:
         """ Gets VRFs that need to be configured by iterating over device interfaces
 
         Returns:
             dict: keyed by vrf name, with values of Netbox RD and list of member interfaces
         """
-        vrfs = defaultdict(lambda: defaultdict(list))
+        vrfs: DefaultDict[DefaultDict, defaultdict] = defaultdict(lambda: defaultdict(list))
         for interface in self.fetch_device_interfaces():
             if interface.vrf:
                 vrfs[interface.vrf.name]['ints'].append(interface.name)
@@ -62,7 +62,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
         return vrfs
 
-    def _get_underlay_ints(self) -> Optional[Dict[str, Dict[str, Any]]]:
+    def _get_underlay_ints(self) -> Optional[list[Dict[str, Any]]]:
         """Returns a list of interface names belonging to the underlay that require OSPF.
 
         Returns:
@@ -204,11 +204,11 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
         return description
 
-
     # If the specific (sub)interface has a non default MTU: return that
     # Else try to find the parent interface MTU
     # Else return None
     def interface_mtu(self, interface_name: str):
+
         """Return the MTU to use on a given interface."""
         mtu = None
         for nb_int in self.fetch_device_interfaces():
@@ -221,7 +221,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         # Wait to be done iterating over all the device' interfaces
         # in case an exact match is found after the parent
         return mtu
-
 
     def _get_junos_interfaces(self):
         """Expose Netbox interfaces in a way that can be efficiently used by a junos template."""
@@ -282,7 +281,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
 
                 interface_config['vlans'] = list(interface_vlans)
 
-
             # Assign the IPs to the interface if any
             if nb_int.count_ipaddresses > 0:
                 # assumes there is v4 for everything
@@ -316,7 +314,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
                         for virt_ip, vrrp_group in virt_ips.items():
                             if ip_interface(virt_ip) in int_ip.network:
                                 if vrrp_group or vrrp_group == 0:
-                                    interface_config['ips'][family][int_ip]['vrrp'] = {ip_interface(virt_ip).ip: vrrp_group}
+                                    interface_config['ips'][family][int_ip]['vrrp'] = {
+                                        ip_interface(virt_ip).ip: vrrp_group
+                                    }
                                 else:
                                     interface_config['ips'][family][int_ip]['anycast'] = ip_interface(virt_ip).ip
                                     interface_config['anycast_gw'] = True
