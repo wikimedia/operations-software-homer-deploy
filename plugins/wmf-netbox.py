@@ -86,12 +86,12 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             dict: dict keyed by first portd ID of every block of 4 with values representing speed
             None: the device is not a QFX5120-48Y model and we thus don't have to consider ports in groups
         """
-        if self._device.metadata['type'] != 'qfx5120-48y-8c':
+        if not self._device.metadata['type'].startswith('qfx5120-48y'):
             return None
 
         port_blocks = {}
         for interface in self.fetch_device_interfaces():
-            if interface.type.value == 'virtual' or interface.mgmt_only:
+            if interface.type.value == 'virtual' or interface.type.value == 'lag' or interface.mgmt_only:
                 continue
 
             port = int(interface.name.split(':')[0].split('/')[-1])
