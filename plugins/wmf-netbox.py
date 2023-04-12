@@ -256,6 +256,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
             if nb_int.mac_address:  # Set the MAC if any in netbox
                 interface_config['mac'] = nb_int.mac_address
 
+            if nb_int.vrf:  # Set the VRF if any in netbox
+                interface_config['vrf'] = nb_int.vrf.name
+
             if nb_int.mode:  # If the interface is tagged or access
                 interface_config['mode'] = nb_int.mode.value
                 # We keep the tagged vlan names
