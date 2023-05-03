@@ -1,6 +1,6 @@
 # Specialized makefile for building the deployment artifacts
 # Debian version to build for
-DEBIAN_VER ?= buster
+DEBIAN_VER ?= bullseye
 # Global build dir
 BUILD_DIR := $(CURDIR)/build
 # Directory where the wheels are built
