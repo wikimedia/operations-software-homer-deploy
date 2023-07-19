@@ -1,4 +1,4 @@
-"""Netbox gathering functions tailored to the WMF needs"""
+"""Netbox gathering functions tailored to the WMF needs."""
 
 from collections import defaultdict
 from typing import Any, DefaultDict, Dict, Optional
@@ -8,7 +8,7 @@ from ipaddress import ip_interface
 from homer.netbox import BaseNetboxDeviceData
 
 
-class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-ancestors
+class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
     """WMF specific class to gather device-specific data dynamically from Netbox."""
 
     def __init__(self, netbox_api, device):
@@ -17,11 +17,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         self._device_interfaces = None
         self._device_ip_addresses = None
         self.device_id = self._device.metadata['netbox_object'].id
-
-        if 'evpn' in self._device.config:
-            self._evpn = self._device.config['evpn']
-        else:
-            self._evpn = False
 
     def fetch_device_interfaces(self):
         """Fetch interfaces from Netbox."""
@@ -44,10 +39,11 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         return sum(1 for nb_int in self.fetch_device_interfaces() if nb_int.type.value == 'lag')
 
     def _get_vrfs(self) -> Optional[defaultdict[defaultdict, defaultdict]]:
-        """ Gets VRFs that need to be configured by iterating over device interfaces
+        """Gets VRFs that need to be configured by iterating over device interfaces.
 
         Returns:
             dict: keyed by vrf name, with values of Netbox RD and list of member interfaces
+
         """
         vrfs: DefaultDict[DefaultDict, defaultdict] = defaultdict(lambda: defaultdict(list))
         for interface in self.fetch_device_interfaces():
@@ -63,6 +59,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         Returns:
             list: a list of interface names.
             None: the device is not part of an underlay switch fabric requiring OSFP.
+
         """
         if 'evpn' not in self._device.config:
             return None
@@ -75,11 +72,12 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         return underlay_ints
 
     def _get_port_block_speeds(self) -> Optional[Dict[int, int]]:
-        """Returns a dict keyed by first port ID of every block of 4 ports and speed for QFX5120-48Y
+        """Returns a dict keyed by first port ID of every block of 4 ports and speed for QFX5120-48Y.
 
         Returns:
             dict: dict keyed by first portd ID of every block of 4 with values representing speed
             None: the device is not a QFX5120-48Y model and we thus don't have to consider ports in groups
+
         """
         if not self._device.metadata['type'].startswith('qfx5120-48y'):
             return None
@@ -109,14 +107,15 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
         return port_blocks
 
     def interface_description(self, intconf):
-        """ Generates interface description based on data in the 'intconf' dict, which gets
-            created by get_link_data() based on various Netbox elements.
+        """Generates interface description based on data in the 'intconf' dict.
 
-            Returns:
-                str: interface description for network device, if the intconf data means we
-                     don't need a custom description returns an empty string.
+        Which gets created by get_link_data() based on various Netbox elements.
+
+        Returns:
+            str: interface description for network device, if the intconf data means we
+                    don't need a custom description returns an empty string.
+
         """
-
         if not intconf['enabled']:
             return "DISABLED"
 
@@ -151,18 +150,19 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
            Netbox description, etc.)  Logic copied from previous get_int_description() function, but builds a
            dict of parameters instead of a single string.
 
-           Returns:
-               dict: dict with the following information relating to the interface:
-                       enabled: whether interface is enabled in Netbox
-                       nb_int_desc: the interface description field from Netbox (default: None)
-                       circuit_id: the circuit id of the connected circuit (default: None)
-                       circuit_desc: the circuit description if present (default: empty string)
-                       link_type: WMF link 'type' where needed, i.e. Core/Transit/Transpot (default: empty string)
-                       z_dev: name of the device the interface connects to (default: empty string)
-                       z_int: name of interface where the connection lands on connected device (default: empty string)
-                       wmf_z_end: boolean indicating if the z_end device is a node managed by WMF (default: True)
-                       upstream_speed: sub-rated peak speed of connected service/circuit if lower than line rate,
-                                       taken from the 'upstream_speed' attribute of the cct termination (default: None)
+        Returns:
+            dict: dict with the following information relating to the interface:
+                    enabled: whether interface is enabled in Netbox
+                    nb_int_desc: the interface description field from Netbox (default: None)
+                    circuit_id: the circuit id of the connected circuit (default: None)
+                    circuit_desc: the circuit description if present (default: empty string)
+                    link_type: WMF link 'type' where needed, i.e. Core/Transit/Transpot (default: empty string)
+                    z_dev: name of the device the interface connects to (default: empty string)
+                    z_int: name of interface where the connection lands on connected device (default: empty string)
+                    wmf_z_end: boolean indicating if the z_end device is a node managed by WMF (default: True)
+                    upstream_speed: sub-rated peak speed of connected service/circuit if lower than line rate,
+                                    taken from the 'upstream_speed' attribute of the cct termination (default: None)
+
         """
         link_data = {
             "enabled": True,
@@ -257,7 +257,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):  # pylint: disable=too-many-
     # Else try to find the parent interface MTU
     # Else return None
     def interface_mtu(self, interface_name: str):
-
         """Return the MTU to use on a given interface."""
         mtu = None
         for nb_int in self.fetch_device_interfaces():
