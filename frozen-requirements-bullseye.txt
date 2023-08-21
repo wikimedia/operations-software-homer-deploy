@@ -1,5 +1,5 @@
 absl-py==1.4.0
-aerleon==1.6.0
+aerleon==1.7.0
 bcrypt==4.0.1
 certifi==2023.7.22
 cffi==1.15.1
@@ -26,7 +26,7 @@ pytz==2023.3
 PyYAML==6.0.1
 requests==2.31.0
 scp==0.14.5
-setuptools==68.0.0
+setuptools==68.1.2
 six==1.16.0
 transitions==0.9.0
 typing_extensions==4.7.1
