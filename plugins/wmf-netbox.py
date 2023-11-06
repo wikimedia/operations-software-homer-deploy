@@ -16,6 +16,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         super().__init__(netbox_api, device)
         self._device_interfaces = None
         self._device_ip_addresses = None
+        self._interface_ip_addresses = None
         self.device_id = self._device.metadata['netbox_object'].id
 
     def fetch_device_interfaces(self):
@@ -31,6 +32,17 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             # Consume the generator or it will be empty if looped more than once.
             self._device_ip_addresses = list(self._api.ipam.ip_addresses.filter(device_id=self.device_id))
         return self._device_ip_addresses
+
+    def _get_interface_ip_addresses(self, interface_name):
+        """Returns IPs belonging to a specific interface."""
+        if not self._interface_ip_addresses:
+            self._interface_ip_addresses = {}
+            for ip_address in self.fetch_device_ip_addresses():
+                if ip_address.assigned_object.name not in self._interface_ip_addresses:
+                    self._interface_ip_addresses[ip_address.assigned_object.name] = {4: [], 6: []}
+                self._interface_ip_addresses[ip_address.assigned_object.name][ip_address.family.value].append(
+                    ip_address)
+        return self._interface_ip_addresses[interface_name]
 
     # We have to specify in the Junos chassis stanza how many LAG interfaces we want to provision
     # This function returns how many ae interfaces are configured on the device
@@ -339,17 +351,18 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                 # assumes there is v4 for everything
                 interface_config['ips'] = {4: {}, 6: {}}
                 virt_ips = {}
-                for ip_address in self.fetch_device_ip_addresses():
-                    if ip_address.assigned_object.name != interface_name:
-                        # Only care about the IPs for our interface
-                        continue
-                    if ip_address.role:
-                        # If we're dealing with a virtual IP, keep it on the side to later on make it a child
-                        # of the real interface IP
-                        if ip_address.role.value == 'anycast':
-                            virt_ips[ip_address.address] = None
-                            continue
-                    interface_config['ips'][ip_address.family.value][ip_interface(ip_address.address)] = {}
+                int_addresses = self._get_interface_ip_addresses(nb_int.name)
+                for address_fam in [4, 6]:
+                    for ip_address in int_addresses[address_fam]:
+                        if ip_address.role and ip_address.role.value == 'anycast':
+                            if len(int_addresses[address_fam]) > 1:
+                                # Int must also have a unique IP so we just save this as VGA VIP
+                                virt_ips[ip_address.address] = None
+                                interface_config['anycast_gw'] = 'vga'
+                                continue
+                            else:
+                                interface_config['anycast_gw'] = 'single'
+                        interface_config['ips'][address_fam][ip_interface(ip_address.address)] = {}
 
                 # Assume that interfaces with FHRP IPs will always have "real" IPs
                 if nb_int.count_fhrp_groups > 0:
@@ -369,7 +382,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                                     }
                                 else:
                                     interface_config['ips'][family][int_ip]['anycast'] = ip_interface(virt_ip).ip
-                                    interface_config['anycast_gw'] = True
 
             # Now that we have all the interface or sub-interface attribute,
             # we need to nest the sub interfaces in the interfaces when needed
