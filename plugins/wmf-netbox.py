@@ -1,11 +1,39 @@
 """Netbox gathering functions tailored to the WMF needs."""
 
+import logging
+
+from re import subn
+
 from collections import defaultdict
 from typing import Any, DefaultDict, Dict, Optional
 
 from ipaddress import ip_interface
 
 from homer.netbox import BaseNetboxDeviceData
+
+logger = logging.getLogger(__name__)
+
+HOSTNAMES_TO_GROUPS: Dict[str, Dict] = {'aux-k8s-ctrl': {'group': 'k8s_aux'},
+                                        'aux-k8s-worker': {'group': 'k8s_aux'},
+                                        'centrallog': {'group': 'anycast', 'ipv4_only': True},
+                                        'dns': {'group': 'anycast', 'ipv4_only': True},
+                                        'doh': {'group': 'anycast'},
+                                        'dse-k8s-worker': {'group': 'k8s_dse'},
+                                        'dse-k8s-ctrl': {'group': 'k8s_dse'},
+                                        'durum': {'group': 'anycast'},
+                                        'kubemaster': {'group': 'k8s'},
+                                        'kubernetes': {'group': 'k8s'},
+                                        'kubestage': {'group': 'k8s_stage'},
+                                        'kubestagemaster': {'group': 'k8s_stage'},
+                                        'lvs': {'group': 'pybal', 'ipv4_only': True},
+                                        'ml-serve': {'group': 'k8s_mlserve'},
+                                        'ml-serve-ctrl': {'group': 'k8s_mlserve'},
+                                        'mw': {'group': 'k8s'},
+                                        'parse': {'group': 'k8s'}
+                                        }
+
+SWITCHES_ROLES = ('asw', 'cloudsw')
+L3_SWITCHES_MODELS = ('qfx5120-48y-afi',)
 
 
 class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
@@ -17,7 +45,12 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self._device_interfaces = None
         self._device_ip_addresses = None
         self._interface_ip_addresses = None
+        self._bgp_servers = None
         self.device_id = self._device.metadata['netbox_object'].id
+        self.device_role = self._device.metadata['netbox_object'].device_role
+        self.device_type = self._device.metadata['netbox_object'].device_type
+        self.device_rack = self._device.metadata['netbox_object'].rack
+        self.device_site = self._device.metadata['netbox_object'].site
 
     def fetch_device_interfaces(self):
         """Fetch interfaces from Netbox."""
@@ -32,6 +65,84 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             # Consume the generator or it will be empty if looped more than once.
             self._device_ip_addresses = list(self._api.ipam.ip_addresses.filter(device_id=self.device_id))
         return self._device_ip_addresses
+
+    def fetch_bgp_servers_l2(self, site: str = '') -> list:
+        """Fetch VMs or VC servers with the BGP custom field from Netbox."""
+        if self._bgp_servers:
+            return self._bgp_servers
+
+        filters = {'status': 'active',
+                   'role': 'server',
+                   'cf_bgp': True}
+        if site:  # slug
+            filters['site'] = site
+        # Consume the generator or it will be empty if looped more than once.
+        bgp_vms = list(self._api.virtualization.virtual_machines.filter(**filters))
+        # In the future we can filter here based on clusters (eg. L3 ganeti)
+        self._bgp_servers = bgp_vms
+        bgp_devices = list(self._api.dcim.devices.filter(**filters))
+        for bgp_device in bgp_devices:
+            # If the physical server's primary IP's interface is connected to a virtual chassis
+            # It means it's connected to a L2 swich
+            try:
+                if bgp_device.primary_ip.assigned_object.connected_endpoint.device.virtual_chassis:
+                    self._bgp_servers.append(bgp_device)
+            except AttributeError:
+                # For example if the server's primary interface is not connected
+                continue
+        return self._bgp_servers
+
+    def normalize_bgp_neighbor(self, server) -> dict:
+        """Abstraction function to normalize the output of VM and physical servers."""
+        bgp_neighbor = {}
+        if server.status.value != 'active':
+            return {}
+        if not server.custom_fields["bgp"]:
+            return {}
+        server_prefix, sub_count = subn(r'\d{4}', '', server.name)
+        if not sub_count:
+            logger.error(f"Can't extract the server prefix from {server.name}.")
+            return {}
+        try:
+            bgp_group = HOSTNAMES_TO_GROUPS[server_prefix]['group']
+        except KeyError:
+            logger.error(f"No BGP group found for {server.name}.")
+            return {}
+        if 'ipv4_only' in HOSTNAMES_TO_GROUPS[server_prefix]:
+            ipv4_only = HOSTNAMES_TO_GROUPS[server_prefix]['ipv4_only']
+        else:
+            ipv4_only = False
+        if server.primary_ip4:
+            bgp_neighbor[4] = ip_interface(server.primary_ip4).ip
+        if server.primary_ip6 and not ipv4_only:
+            bgp_neighbor[6] = ip_interface(server.primary_ip6).ip
+        return {'group': bgp_group, 'name': server.name, 'ip_addresses': bgp_neighbor}
+
+    def _get_bgp_servers(self) -> dict:
+        """Servers that need BGP configured on that router."""
+        bgp_neighbors: DefaultDict = defaultdict(dict)
+        # For L3 switches iterate over the direcly connected servers
+        if self.device_role.slug in SWITCHES_ROLES and self.device_type.slug in L3_SWITCHES_MODELS:
+            for interface in self.fetch_device_interfaces():
+                if interface.connected_endpoint_type != 'dcim.interface':
+                    continue
+                try:
+                    z_device = interface.connected_endpoint.device
+                    if z_device.rack != self.device_rack:  # Skip devices that have cross rack links
+                        continue
+                    neighbor = self.normalize_bgp_neighbor(z_device)
+                    if neighbor:
+                        bgp_neighbors[neighbor['group']][neighbor['name']] = neighbor['ip_addresses']
+                except AttributeError:
+                    continue
+
+        elif self.device_role.slug in ('cr'):
+            # For core routers fetch all the servers with the bgp routing custom field then filter them more
+            for local_bgp_servers in self.fetch_bgp_servers_l2(self.device_site.slug):
+                neighbor = self.normalize_bgp_neighbor(local_bgp_servers)
+                if neighbor:
+                    bgp_neighbors[neighbor['group']][neighbor['name']] = neighbor['ip_addresses']
+        return bgp_neighbors
 
     def _get_interface_ip_addresses(self, interface_name):
         """Returns IPs belonging to a specific interface."""
