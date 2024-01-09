@@ -33,7 +33,7 @@ HOSTNAMES_TO_GROUPS: Dict[str, Dict] = {'aux-k8s-ctrl': {'group': 'k8s_aux'},
                                         }
 
 SWITCHES_ROLES = ('asw', 'cloudsw')
-L3_SWITCHES_MODELS = ('qfx5120-48y-afi',)
+L3_SWITCHES_MODELS = ('qfx5120-48y-afi', 'qfx5120-48y-afi2')
 
 
 class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
