@@ -82,10 +82,10 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self._bgp_servers = bgp_vms
         bgp_devices = list(self._api.dcim.devices.filter(**filters))
         for bgp_device in bgp_devices:
-            # If the physical server's primary IP's interface is connected to a virtual chassis
-            # It means it's connected to a L2 swich
             try:
-                if bgp_device.primary_ip.assigned_object.connected_endpoint.device.virtual_chassis:
+                # We include the server if it's connected to a VC switch or row-wide vlan
+                switchport = bgp_device.primary_ip.assigned_object.connected_endpoint
+                if switchport.device.virtual_chassis or self.legacy_vlan_name(switchport.untagged_vlan.name):
                     self._bgp_servers.append(bgp_device)
             except AttributeError:
                 # For example if the server's primary interface is not connected
@@ -118,6 +118,14 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             bgp_neighbor[6] = ip_interface(server.primary_ip6).ip
         return {'group': bgp_group, 'name': server.name, 'ip_addresses': bgp_neighbor}
 
+    def legacy_vlan_name(self, vlan_name) -> bool:
+        """Returns true if vlan name convention is legacy row-wide."""
+        split_name = vlan_name.split('-')
+        # If no rack location in vlan name or rack location is only 1 char (i.e. row-wide)
+        if len(split_name) < 3 or len(split_name[1]) == 1:
+            return True
+        return False
+
     def _get_bgp_servers(self) -> dict:
         """Servers that need BGP configured on that router."""
         bgp_neighbors: DefaultDict = defaultdict(dict)
@@ -125,6 +133,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         if self.device_role.slug in SWITCHES_ROLES and self.device_type.slug in L3_SWITCHES_MODELS:
             for interface in self.fetch_device_interfaces():
                 if interface.connected_endpoint_type != 'dcim.interface':
+                    continue
+                if self.legacy_vlan_name(interface.untagged_vlan.name):
                     continue
                 try:
                     z_device = interface.connected_endpoint.device
