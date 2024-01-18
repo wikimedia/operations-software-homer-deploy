@@ -134,7 +134,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             for interface in self.fetch_device_interfaces():
                 if interface.connected_endpoint_type != 'dcim.interface':
                     continue
-                if self.legacy_vlan_name(interface.untagged_vlan.name):
+                if not interface.untagged_vlan or self.legacy_vlan_name(interface.untagged_vlan.name):
                     continue
                 try:
                     z_device = interface.connected_endpoint.device
