@@ -46,7 +46,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self._device_interfaces = None
         self._device_ip_addresses = None
         self._interface_ip_addresses = None
-        self._bgp_servers = None
+        self._bgp_servers = []
         self.device_id = self._device.metadata['netbox_object'].id
         self.device_role = self._device.metadata['netbox_object'].device_role
         self.device_type = self._device.metadata['netbox_object'].device_type
@@ -68,7 +68,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         return self._device_ip_addresses
 
     def fetch_bgp_servers_l2(self, site: str = '') -> list:
-        """Fetch VMs or VC servers with the BGP custom field from Netbox."""
+        """Fetch VMs or VC servers with the BGP custom field from Netbox which peer with CRs."""
         if self._bgp_servers:
             return self._bgp_servers
 
@@ -77,19 +77,33 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                    'cf_bgp': True}
         if site:  # slug
             filters['site'] = site
-        # Consume the generator or it will be empty if looped more than once.
-        bgp_vms = list(self._api.virtualization.virtual_machines.filter(**filters))
+
         # In the future we can filter here based on clusters (eg. L3 ganeti)
-        self._bgp_servers = bgp_vms
+        bgp_vms = list(self._api.virtualization.virtual_machines.filter(**filters))
+        for bgp_vm in bgp_vms:
+            hypervisors = self._api.dcim.devices.filter(cluster_id=bgp_vm.cluster.id)
+            for hypervisor in hypervisors:
+                try:
+                    # Get the switch the ganeti host is connected to
+                    ganeti_bridge = hypervisor.primary_ip.assigned_object
+                    ganeti_uplink = self._api.dcim.interfaces.get(device_id=hypervisor.id, bridge_id=ganeti_bridge.id,
+                                                                  type__neq='virtual')
+                    switchport = ganeti_uplink.connected_endpoint
+                    # We include the server if it's connected to a VC switch or row-wide vlan
+                    if switchport.device.virtual_chassis or self.legacy_vlan_name(switchport.untagged_vlan.name):
+                        self._bgp_servers.append(bgp_vm)
+                except AttributeError:
+                    # For example if the server's primary interface is not connected
+                    continue
+                break
+
         bgp_devices = list(self._api.dcim.devices.filter(**filters))
         for bgp_device in bgp_devices:
             try:
-                # We include the server if it's connected to a VC switch or row-wide vlan
                 switchport = bgp_device.primary_ip.assigned_object.connected_endpoint
                 if switchport.device.virtual_chassis or self.legacy_vlan_name(switchport.untagged_vlan.name):
                     self._bgp_servers.append(bgp_device)
             except AttributeError:
-                # For example if the server's primary interface is not connected
                 continue
         return self._bgp_servers
 
@@ -132,6 +146,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         bgp_neighbors: DefaultDict = defaultdict(dict)
         # For L3 switches iterate over the direcly connected servers
         if self.device_role.slug in SWITCHES_ROLES and self.device_type.slug in L3_SWITCHES_MODELS:
+            ganeti_clusters = set()
             for interface in self.fetch_device_interfaces():
                 if interface.connected_endpoint_type != 'dcim.interface':
                     continue
@@ -139,8 +154,23 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                     continue
                 try:
                     z_device = interface.connected_endpoint.device
-                    if z_device.rack != self.device_rack:  # Skip devices that have cross rack links
+                    if z_device.rack != self.device_rack:  # Skip links to devices in other racks (i.e. lvs)
                         continue
+
+                    # For Ganeti hosts we need to work out if VMs peer with the switch
+                    if z_device.cluster and z_device.cluster not in ganeti_clusters:
+                        ganeti_clusters.add(z_device.cluster)
+                        hypervisors = self._api.dcim.devices.filter(cluster_id=z_device.cluster.id)
+                        hypervisor_racks = set([hypervisor.rack for hypervisor in hypervisors])
+                        if len(hypervisor_racks) == 1:
+                            # Cluster is only in this rack, VMs should peer with SW not CR
+                            bgp_vms = self._api.virtualization.virtual_machines.filter(
+                                cluster_id=z_device.cluster.id, cf_bgp=True)
+                            for bgp_vm in bgp_vms:
+                                neighbor = self.normalize_bgp_neighbor(bgp_vm)
+                                if neighbor:
+                                    bgp_neighbors[neighbor['group']][neighbor['name']] = neighbor['ip_addresses']
+
                     neighbor = self.normalize_bgp_neighbor(z_device)
                     if neighbor:
                         bgp_neighbors[neighbor['group']][neighbor['name']] = neighbor['ip_addresses']
