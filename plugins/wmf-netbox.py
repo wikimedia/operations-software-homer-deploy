@@ -30,7 +30,9 @@ HOSTNAMES_TO_GROUPS: Dict[str, Dict] = {'aux-k8s-ctrl': {'group': 'k8s_aux'},
                                         'ml-serve': {'group': 'k8s_mlserve'},
                                         'ml-serve-ctrl': {'group': 'k8s_mlserve'},
                                         'mw': {'group': 'k8s'},
-                                        'parse': {'group': 'k8s'}
+                                        'parse': {'group': 'k8s'},
+                                        'wikikube-ctrl': {'group': 'k8s'},
+                                        'wikikube-worker': {'group': 'k8s'}
                                         }
 
 SWITCHES_ROLES = ('asw', 'cloudsw')
