@@ -3,12 +3,22 @@
 DEBIAN_VER ?= bullseye
 # Global build dir
 BUILD_DIR := $(CURDIR)/build
+# Directory for pip cache
+CACHE_DIR = $(BUILD_DIR)/cache
 # Directory where the wheels are built
 WHEELS_DIR := $(BUILD_DIR)/wheels
 # Docker image
 IMG_NAME := docker-registry.wikimedia.org/python3-build-$(DEBIAN_VER)
 # Where to save the artficats
 ARTIFACTS := $(WHEELS_DIR)/$(DEBIAN_VER)/artifacts.tar.gz
+
+UID := $(shell id -u)
+
+_t := $(shell docker --version|grep podman)
+ifeq ($(.SHELLSTATUS),0)
+    $(info Detected Podman/buildah)
+    PODMAN_RUN_OPTIONS = --userns=keep-id
+endif
 
 ### Build-related tasks ###
 # task all
@@ -24,8 +34,17 @@ $(ARTIFACTS): .docker_built
 	mkdir -p $(WHEELS_DIR)/$(DEBIAN_VER)
 	rm -f frozen-requirements.txt
 	ln -s frozen-requirements-$(DEBIAN_VER).txt frozen-requirements.txt
-	docker run --rm -v $(CURDIR):/deploy:ro -v $(WHEELS_DIR)/$(DEBIAN_VER):/wheels:rw -v /etc/group:/etc/group:ro \
-		-v /etc/passwd:/etc/passwd:ro --user=$(UID) homer-build:local
+	docker run --rm \
+		--platform linux/amd64 \
+		-e XDG_CACHE_HOME=/cache \
+		-v $(CACHE_DIR):/cache:rw \
+		-v $(CURDIR):/deploy:ro \
+		-v $(WHEELS_DIR)/$(DEBIAN_VER):/wheels:rw \
+		-v /etc/group:/etc/group:ro \
+		-v /etc/passwd:/etc/passwd:ro \
+		--user=$(UID) \
+		$(PODMAN_RUN_OPTIONS) \
+		homer-build:local
 
 # task clean
 # clean docker artifacts for one distro
@@ -34,8 +53,16 @@ clean:
 	- rm -rf .docker_built
 
 freeze: .docker_built
-	docker run --rm -v $(CURDIR):/deploy:rw -v /etc/group:/etc/group:ro \
-		-v /etc/passwd:/etc/passwd:ro --user=$(UID) -w /deploy/src \
+	docker run --rm \
+		--platform linux/amd64 \
+		-e XDG_CACHE_HOME=/cache \
+		-v $(CACHE_DIR):/cache:rw \
+		-v $(CURDIR):/deploy:rw \
+		-v /etc/group:/etc/group:ro \
+		-v /etc/passwd:/etc/passwd:ro \
+		--user=$(UID) \
+		$(PODMAN_RUN_OPTIONS) \
+		-w /deploy/src \
 		homer-build:local /bin/freeze $(DEBIAN_VER)
 
 .docker_built: Dockerfile.build freeze_requirements.sh
