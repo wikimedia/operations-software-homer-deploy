@@ -39,6 +39,8 @@ HOSTNAMES_TO_GROUPS: Dict[str, Dict] = {'aux-k8s-ctrl': {'group': 'k8s_aux'},
 
 SWITCHES_ROLES = ('asw', 'cloudsw')
 L3_SWITCHES_MODELS = ('qfx5120-48y-afi', 'qfx5120-48y-afi2')
+JUNIPER_LEGACY_SW = ('qfx5100-48s-6q', 'ex4600-40f', 'ex4300-48t')
+NO_QOS_INTS = ('irb', 'lo', 'fxp', 'em', 'vme')
 
 
 class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
@@ -51,6 +53,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self._device_ip_addresses = None
         self._interface_ip_addresses = None
         self._bgp_servers = []
+        self._junos_interfaces = {}
+        self._qos_interfaces = {}
         self.device_id = self._device.metadata['netbox_object'].id
         self.role = self._device.metadata['netbox_object'].role
         self.device_type = self._device.metadata['netbox_object'].device_type
@@ -457,6 +461,75 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         return link_data
 
+    def _get_qos_interfaces(self) -> dict:
+        """ Populates the _qos_interfaces dict based on interfaces dict
+            produced by _get_junos_interfaces()
+
+            _qos_interfaces is a dict, keyed by interface name, as with dict elements as follows:
+                  dscp_classifier: classifier for ipv4 dscp if required
+                  dscp_ip6_classifier: classifier for ipv6 dscp if required
+                  shape_rate: overall shaper rate if required
+                  units: dict keyed by interface unit number to place above elements when they need to be added there
+        """
+
+        if self._qos_interfaces:
+            return self._qos_interfaces
+
+        if not self._junos_interfaces:
+            self._get_junos_interfaces()
+
+        DSCP_V4_CLASSIFIER = {
+            'dscp_classifier': True
+        }
+
+        DSCP_DUAL_CLASSIFIER = {
+            'dscp_classifier': True,
+            'dscp_ip6_classifier': True
+        }
+
+        qos_ints: DefaultDict = defaultdict(dict)
+        for int_name, int_conf in self._junos_interfaces.items():
+            # We ignore certain interfaces
+            if int_name.startswith(NO_QOS_INTS) or 'lag' in int_conf or not int_conf['enabled']:
+                continue
+
+            # Remaining will all get QoS so create element in dict for it
+            qos_ints[int_name]['units'] = {}
+            if "description" in int_conf:
+                qos_ints[int_name]['description'] = int_conf['description']
+            # If circuit has sub-rated peak rate set the shaper to 98% of max
+            if "upstream_speed" in int_conf and int_conf['upstream_speed']:
+                qos_ints[int_name]['shape_rate'] = int(int_conf['upstream_speed'] * 0.98)
+
+            if self.role.slug in SWITCHES_ROLES:
+                # Standard L2 ports facing servers or CRs
+                if 'vlans' in int_conf and int_conf['vlans']:
+                    if self.device_type.slug in JUNIPER_LEGACY_SW:
+                        qos_ints[int_name]['units'][0] = DSCP_V4_CLASSIFIER
+                    else:
+                        qos_ints[int_name]['units'][0] = DSCP_DUAL_CLASSIFIER
+
+                # L3 routed interfaces or ports with routed sub-interfaces
+                elif "ips" in int_conf or "sub" in int_conf:
+                    qos_ints[int_name].update(DSCP_V4_CLASSIFIER)
+
+            elif self.role.slug == "cr":
+                if "sub" in int_conf:
+                    units = int_conf['sub'].keys()
+                else:
+                    units = [0]
+
+                if "link_type" in int_conf and int_conf['link_type'] in ('Core', 'Transport'):
+                    for unit in units:
+                        qos_ints[int_name]['units'][unit] = DSCP_DUAL_CLASSIFIER
+                elif int_name.startswith("gr-"):
+                    for unit, sub_conf in int_conf['sub'].items():
+                        if sub_conf['link_type'] == "Transport-tun":
+                            qos_ints[int_name]['units'][unit] = DSCP_DUAL_CLASSIFIER
+
+        self._qos_interfaces = qos_ints
+        return qos_ints
+
     # If the specific (sub)interface has a non default MTU: return that
     # Else try to find the parent interface MTU
     # Else return None
@@ -476,6 +549,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
     def _get_junos_interfaces(self):
         """Expose Netbox interfaces in a way that can be efficiently used by a junos template."""
+        if self._junos_interfaces:
+            return self._junos_interfaces
+
         jri = {}  # Junos interfaces
         lags_members = defaultdict(list)  # List all the lags to find mixed ones
         ignore_interfaces = ['fxp0-re0', 'fxp0-re1']  # Those are managed in `set groups`
@@ -575,32 +651,37 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                                 else:
                                     interface_config['ips'][family][int_ip]['anycast'] = ip_interface(virt_ip).ip
 
-            # Now that we have all the interface or sub-interface attribute,
-            # we need to nest the sub interfaces in the interfaces when needed
-            if '.' in interface_name and interface_name.split('.')[0] in jri:
-                # It's a sub-interface and we already have the parent interface, add the sub interface
+            # Now that we have all the interface attributes, we add it to the jri dict,
+            # either directly or as a 'sub' to the parent int
+            if '.' in interface_name:
+                # Sub-interface - add sub to existing parent or create it with sub
                 parent, sub = interface_name.split('.', 1)
-                if 'sub' not in jri[parent]:
-                    jri[parent]['sub'] = {}
-                jri[parent]['sub'][sub] = interface_config
-            # If we have the sub interface but not the parent yet
-            elif '.' in interface_name and interface_name.split('.')[0] not in jri:
-                parent, sub = interface_name.split('.', 1)
-                # Create the parent
-                jri[parent] = {'sub': {sub: interface_config}}
-            # If we have the parent interface but we found a sub interface earlier
-            elif '.' not in interface_name and interface_name in jri:
-                # Merge the new stuff with the existing one
-                jri[interface_name].update(interface_config)
-            # Easiest case, we find the parent interface first
-            elif '.' not in interface_name and interface_name not in jri:
-                jri[interface_name] = interface_config
+                if parent in jri:
+                    if 'sub' not in jri[parent]:
+                        jri[parent]['sub'] = {}
+                    jri[parent]['sub'][sub] = interface_config
+                else:
+                    jri[parent] = {'sub': {sub: interface_config}, 'enabled': True}
+            else:
+                # Physical-int - merge data with existing or add as new element
+                try:
+                    jri[interface_name].update(interface_config)
+                except KeyError:
+                    jri[interface_name] = interface_config
 
             # TODO Remove some Juniper oddities, eg. sub interfaces for LAG members
 
-        # Check if there is any mixed LAG
+        # Process LAGs
         for lag, members in lags_members.items():
+            # If mixed-speed ints (based on int name) set mode to mixed
             if len(set([member.split('-')[0] for member in members])) > 1:
                 jri[lag]['mixed'] = True
+            # Copy 'link_type' parameter from member to LAG itself
+            if not jri[lag]['link_type']:
+                for member in members:
+                    if jri[member]['link_type']:
+                        jri[lag]['link_type'] = jri[member]['link_type']
+                        break
 
+        self._junos_interfaces = jri
         return jri
