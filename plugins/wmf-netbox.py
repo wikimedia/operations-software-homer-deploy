@@ -52,7 +52,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self._interface_ip_addresses = None
         self._bgp_servers = []
         self.device_id = self._device.metadata['netbox_object'].id
-        self.device_role = self._device.metadata['netbox_object'].device_role
+        self.role = self._device.metadata['netbox_object'].role
         self.device_type = self._device.metadata['netbox_object'].device_type
         self.device_rack = self._device.metadata['netbox_object'].rack
         self.device_site = self._device.metadata['netbox_object'].site
@@ -92,7 +92,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                     ganeti_bridge = hypervisor.primary_ip.assigned_object
                     ganeti_uplink = self._api.dcim.interfaces.get(device_id=hypervisor.id, bridge_id=ganeti_bridge.id,
                                                                   type__neq='virtual')
-                    switchport = ganeti_uplink.connected_endpoint
+                    switchport = ganeti_uplink.connected_endpoints[0]
                     # We include the server if it's connected to a VC switch or row-wide vlan
                     if switchport.device.virtual_chassis or self.legacy_vlan_name(switchport.untagged_vlan.name):
                         self._bgp_servers.append(bgp_vm)
@@ -104,7 +104,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         bgp_devices = list(self._api.dcim.devices.filter(**filters))
         for bgp_device in bgp_devices:
             try:
-                switchport = bgp_device.primary_ip.assigned_object.connected_endpoint
+                switchport = bgp_device.primary_ip.assigned_object.connected_endpoints[0]
                 if switchport.device.virtual_chassis or self.legacy_vlan_name(switchport.untagged_vlan.name):
                     self._bgp_servers.append(bgp_device)
             except AttributeError:
@@ -149,15 +149,15 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         """Servers that need BGP configured on that router."""
         bgp_neighbors: DefaultDict = defaultdict(dict)
         # For L3 switches iterate over the direcly connected servers
-        if self.device_role.slug in SWITCHES_ROLES and self.device_type.slug in L3_SWITCHES_MODELS:
+        if self.role.slug in SWITCHES_ROLES and self.device_type.slug in L3_SWITCHES_MODELS:
             ganeti_clusters = set()
             for interface in self.fetch_device_interfaces():
-                if interface.connected_endpoint_type != 'dcim.interface':
+                if interface.connected_endpoints_type != 'dcim.interface':
                     continue
                 if not interface.untagged_vlan or self.legacy_vlan_name(interface.untagged_vlan.name):
                     continue
                 try:
-                    z_device = interface.connected_endpoint.device
+                    z_device = interface.connected_endpoints[0].device
                     if z_device.rack != self.device_rack:  # Skip links to devices in other racks (i.e. lvs)
                         continue
 
@@ -181,7 +181,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                 except AttributeError:
                     continue
 
-        elif self.device_role.slug in ('cr'):
+        elif self.role.slug in ('cr'):
             # For core routers fetch all the servers with the bgp routing custom field then filter them more
             for local_bgp_servers in self.fetch_bgp_servers_l2(self.device_site.slug):
                 neighbor = self.normalize_bgp_neighbor(local_bgp_servers)
@@ -382,42 +382,42 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         # b_int is either the patch panel interface facing out or the initial interface
         # if no patch panel
-        if a_int.link_peer_type == 'dcim.frontport' and a_int.link_peer.rear_port:
-            b_int = a_int.link_peer.rear_port
+        if a_int.link_peers_type == 'dcim.frontport' and a_int.link_peers[0].rear_port:
+            b_int = a_int.link_peers[0].rear_port
         else:
             # If the patch panel isn't patched through
             b_int = a_int
         # keep dcim.frontport or rear port below for the cases where patch panels are chained.
         # This doesn't handle all the imaginable cases (eg. chaining patch panels and circuits)
         # But handles all our infra cases. To be expanded as needed.
-        if b_int.link_peer_type in ('dcim.interface', 'dcim.frontport', 'dcim.rearport'):
-            if a_int.connected_endpoint.device.virtual_chassis:
+        if b_int.link_peers_type in ('dcim.interface', 'dcim.frontport', 'dcim.rearport'):
+            if a_int.connected_endpoints[0].device.virtual_chassis:
                 # In VCs we use its virtual name stored in the domain field
                 # And only keep the host part
-                link_data['z_dev'] = a_int.connected_endpoint.device.virtual_chassis.domain.split('.')[0]
+                link_data['z_dev'] = a_int.connected_endpoints[0].device.virtual_chassis.domain.split('.')[0]
             else:
-                link_data['z_dev'] = a_int.connected_endpoint.device.name
-            link_data['z_int'] = a_int.connected_endpoint.name
+                link_data['z_dev'] = a_int.connected_endpoints[0].device.name
+            link_data['z_int'] = a_int.connected_endpoints[0].name
             # Set the link type depending on the other side's type
             core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
 
-            if a_int.connected_endpoint.device.device_role.slug in core_link_z_dev_types:
+            if a_int.connected_endpoints[0].device.role.slug in core_link_z_dev_types:
                 link_data['link_type'] = 'Core'
 
-        if b_int.link_peer_type == 'circuits.circuittermination':
+        if b_int.link_peers_type == 'circuits.circuittermination':
             # Variables needed regardless of the types of circuits
-            link_data['link_type'] = b_int.link_peer.circuit.type.name
-            link_data['provider'] = b_int.link_peer.circuit.provider.name
-            link_data['circuit_id'] = b_int.link_peer.circuit.cid
-            link_data['circuit_desc'] = b_int.link_peer.circuit.description
-            if b_int.link_peer.circuit.termination_z:
-                link_data['upstream_speed'] = b_int.link_peer.circuit.termination_z.upstream_speed
+            link_data['link_type'] = b_int.link_peers[0].circuit.type.name
+            link_data['provider'] = b_int.link_peers[0].circuit.provider.name
+            link_data['circuit_id'] = b_int.link_peers[0].circuit.cid
+            link_data['circuit_desc'] = b_int.link_peers[0].circuit.description
+            if b_int.link_peers[0].circuit.termination_z:
+                link_data['upstream_speed'] = b_int.link_peers[0].circuit.termination_z.upstream_speed
 
-            if not a_int.connected_endpoint or a_int.connected_endpoint_type == 'circuits.providernetwork':
+            if not a_int.connected_endpoints or a_int.connected_endpoints_type == 'circuits.providernetwork':
                 link_data['wmf_z_end'] = False
             else:
-                link_data['z_dev'] = a_int.connected_endpoint.device.name
-                link_data['z_int'] = a_int.connected_endpoint.name
+                link_data['z_dev'] = a_int.connected_endpoints[0].device.name
+                link_data['z_int'] = a_int.connected_endpoints[0].name
 
         return link_data
 
