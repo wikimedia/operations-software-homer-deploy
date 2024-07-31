@@ -56,12 +56,17 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self.device_type = self._device.metadata['netbox_object'].device_type
         self.device_rack = self._device.metadata['netbox_object'].rack
         self.device_site = self._device.metadata['netbox_object'].site
+        self.virtual_chassis = self._device.metadata['netbox_object'].virtual_chassis
 
     def fetch_device_interfaces(self):
         """Fetch interfaces from Netbox."""
         if not self._device_interfaces:
+            if self.virtual_chassis:
+                interfaces_filter = {'virtual_chassis_id': self.virtual_chassis.id}
+            else:
+                interfaces_filter = {'device_id': self.device_id}
             # Consume the generator or it will be empty if looped more than once.
-            self._device_interfaces = list(self._api.dcim.interfaces.filter(device_id=self.device_id))
+            self._device_interfaces = list(self._api.dcim.interfaces.filter(**interfaces_filter))
         return self._device_interfaces
 
     def fetch_device_ip_addresses(self):
