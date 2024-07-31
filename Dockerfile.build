@@ -6,7 +6,7 @@ USER root
 RUN apt-get update && \
     apt-get -y --no-install-recommends install build-essential python3-dev \
         libsasl2-dev && \
-    python3 -m pip install --upgrade setuptools && \
+    python3 -m pip install --upgrade setuptools_scm && \
     python3 -m pip install --upgrade pip
 
 USER nobody
