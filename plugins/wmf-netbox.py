@@ -296,6 +296,12 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             # Custom description from Netbox descrtiption field
             return intconf['nb_int_desc']
 
+        if intconf['tunnel']:
+            if intconf['z_dev']:
+                return f"Transport-tun: {intconf['z_dev']}:{intconf['z_int']} {intconf['tunnel']['description']}"
+            else:
+                return intconf['tunnel']['description']
+
         if intconf['circuit_id']:
             # Link connects to a third party circuit
             cct_desc = f"{intconf['circuit_id']} {intconf.get('circuit_desc', '')}".strip()
@@ -333,6 +339,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                     z_dev: name of the device the interface connects to (default: empty string)
                     z_int: name of interface where the connection lands on connected device (default: empty string)
                     wmf_z_end: boolean indicating if the z_end device is a node managed by WMF (default: True)
+                    tunnel: dict with detail of tunnel config params if it is a GRE int
                     upstream_speed: sub-rated peak speed of connected service/circuit if lower than line rate,
                                     taken from the 'upstream_speed' attribute of the cct termination (default: None)
 
@@ -346,6 +353,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             "z_dev": '',
             "z_int": '',
             "wmf_z_end": True,
+            "tunnel": {},
             "upstream_speed": None
         }
 
@@ -357,6 +365,29 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         # If Netbox has a description record that in link_data
         if nb_interface.description:
             link_data['nb_int_desc'] = nb_interface.description
+
+        if nb_interface.name.startswith("gr-"):
+            # Get tunnel termination that matches
+            tunnel_termination = self._api.vpn.tunnel_terminations.get(termination_id=nb_interface.id)
+            if tunnel_termination is None:
+                return link_data
+            link_data['tunnel']['source'] = ip_interface(tunnel_termination.outside_ip.address).ip
+            link_data['tunnel']['name'] = tunnel_termination.tunnel.name
+            link_data['tunnel']['description'] = tunnel_termination.tunnel.description
+            if tunnel_termination.role.value == "spoke":
+                # Right now spoke is only for CF so we can set type based on that
+                link_data['wmf_z_end'] = False
+                link_data['link_type'] = "Transit-tun"
+                link_data['tunnel']['destination'] = ip_interface(
+                    tunnel_termination.tunnel.group.custom_fields['hub_ip']['address']).ip
+            else:
+                z_end_termination = self._api.vpn.tunnel_terminations.get(tunnel_id=tunnel_termination.tunnel.id,
+                                                                          id__n=tunnel_termination.id)
+                link_data['link_type'] = "Transport-tun"
+                link_data['tunnel']['destination'] = ip_interface(z_end_termination.outside_ip.address).ip
+                link_data['z_dev'] = z_end_termination.termination.device.name
+                link_data['z_int'] = z_end_termination.termination.name
+            return link_data
 
         # Set a_int to nb interface object of the near-side of the cable
         a_int = None
