@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 HOSTNAMES_TO_GROUPS: Dict[str, Dict] = {'aux-k8s-ctrl': {'group': 'k8s_aux'},
                                         'aux-k8s-worker': {'group': 'k8s_aux'},
                                         'centrallog': {'group': 'anycast', 'ipv4_only': True},
+                                        'cephosd': {'group': 'anycast'},
                                         'dns': {'group': 'anycast', 'ipv4_only': True},
                                         'doh': {'group': 'anycast'},
                                         'dse-k8s-worker': {'group': 'k8s_dse'},
