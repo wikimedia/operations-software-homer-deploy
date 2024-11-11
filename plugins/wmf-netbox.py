@@ -303,7 +303,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         if intconf['tunnel']:
             if intconf['z_dev']:
-                return f"Transport-tun: {intconf['z_dev']}:{intconf['z_int']} {intconf['tunnel']['description']}"
+                return f"{intconf['link_type']}: " \
+                       f"{intconf['z_dev']}:{intconf['z_int']} {intconf['tunnel']['description']}"
             else:
                 return intconf['tunnel']['description']
 
@@ -371,27 +372,47 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         if nb_interface.description:
             link_data['nb_int_desc'] = nb_interface.description
 
-        if nb_interface.name.startswith("gr-"):
+        if nb_interface.name.startswith("gr-") or nb_interface.name.startswith("st"):
             # Get tunnel termination that matches
             tunnel_termination = self._api.vpn.tunnel_terminations.get(termination_id=nb_interface.id)
             if tunnel_termination is None:
                 return link_data
+            tunnel = self._api.vpn.tunnels.get(id=tunnel_termination.tunnel.id)
             link_data['tunnel']['source'] = ip_interface(tunnel_termination.outside_ip.address).ip
-            link_data['tunnel']['name'] = tunnel_termination.tunnel.name
-            link_data['tunnel']['description'] = tunnel_termination.tunnel.description
+            link_data['tunnel']['name'] = tunnel.name
+            link_data['tunnel']['description'] = tunnel.description
             if tunnel_termination.role.value == "spoke":
                 # Right now spoke is only for CF so we can set type based on that
                 link_data['wmf_z_end'] = False
                 link_data['link_type'] = "Transit-tun"
                 link_data['tunnel']['destination'] = ip_interface(
-                    tunnel_termination.tunnel.group.custom_fields['hub_ip']['address']).ip
+                    tunnel.group.custom_fields['hub_ip']['address']).ip
             else:
                 z_end_termination = self._api.vpn.tunnel_terminations.get(tunnel_id=tunnel_termination.tunnel.id,
                                                                           id__n=tunnel_termination.id)
-                link_data['link_type'] = "Transport-tun"
                 link_data['tunnel']['destination'] = ip_interface(z_end_termination.outside_ip.address).ip
                 link_data['z_dev'] = z_end_termination.termination.device.name
                 link_data['z_int'] = z_end_termination.termination.name
+                link_data['link_type'] = "Transport-tun"
+                if tunnel.encapsulation.value == "ipsec-tunnel":
+                    # Route-based IPsec tunnel, include additional properties
+                    link_data['link_type'] = "IPsec-tun"
+                    link_data['tunnel']['ipsec'] = {}
+                    ipsec_profile = self._api.vpn.ipsec_profiles.get(id=tunnel.ipsec_profile.id)
+                    # Phase 1 info
+                    ike_policy = self._api.vpn.ike_policies.get(id=ipsec_profile.ike_policy.id)
+                    ike_proposal = self._api.vpn.ike_proposals.get(ike_policy.proposals[0].id)
+                    link_data['tunnel']['ipsec']['ike_proposal'] = {
+                        'encryption': ike_proposal.encryption_algorithm.value,
+                        'dh_group': ike_proposal.group.value
+                    }
+                    # Phase 2 info
+                    ipsec_policy = self._api.vpn.ipsec_policies.get(id=ipsec_profile.ipsec_policy.id)
+                    link_data['tunnel']['ipsec']['pfs_dh_group'] = ipsec_policy.pfs_group.value
+                    ipsec_proposal = self._api.vpn.ipsec_proposals.get(ipsec_policy.proposals[0].id)
+                    link_data['tunnel']['ipsec']['ipsec_proposal'] = {
+                        'encryption': ipsec_proposal.encryption_algorithm.value
+                    }
             return link_data
 
         # Set a_int to nb interface object of the near-side of the cable
