@@ -50,7 +50,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
     def __init__(self, netbox_api, base_paths, device):
         """Initialize the instance."""
         super().__init__(netbox_api, base_paths, device)
-        self._device_interfaces = None
         self._device_ip_addresses = None
         self._interface_ip_addresses = None
         self._bgp_servers = []
@@ -62,24 +61,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self.device_rack = self._device.metadata['netbox_object'].rack
         self.device_site = self._device.metadata['netbox_object'].site
         self.virtual_chassis = self._device.metadata['netbox_object'].virtual_chassis
-
-    def fetch_device_interfaces(self):
-        """Fetch interfaces from Netbox."""
-        if not self._device_interfaces:
-            if self.virtual_chassis:
-                interfaces_filter = {'virtual_chassis_id': self.virtual_chassis.id}
-            else:
-                interfaces_filter = {'device_id': self.device_id}
-            # Consume the generator or it will be empty if looped more than once.
-            self._device_interfaces = list(self._api.dcim.interfaces.filter(**interfaces_filter))
-        return self._device_interfaces
-
-    def fetch_device_ip_addresses(self):
-        """Fetch IPs from Netbox."""
-        if not self._device_ip_addresses:
-            # Consume the generator or it will be empty if looped more than once.
-            self._device_ip_addresses = list(self._api.ipam.ip_addresses.filter(device_id=self.device_id))
-        return self._device_ip_addresses
 
     def fetch_bgp_servers_l2(self, site: str = '') -> list:
         """Fetch VMs or servers on legacy vlans with BGP custom field set that should peer with CRs."""
@@ -148,17 +129,23 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
     def _get_bgp_servers(self) -> dict:
         """Servers that need BGP configured on that router."""
         bgp_neighbors: DefaultDict = defaultdict(dict)
-        # For L3 switches iterate over the direcly connected servers
+        # For L3 switches iterate over the directly connected servers
         if self.role.slug in SWITCHES_ROLES and self.device_type.slug in L3_SWITCHES_MODELS:
             ganeti_clusters = set()
             for interface in self.fetch_device_interfaces():
-                if interface.connected_endpoints_type != 'dcim.interface':
+                if not interface['connected_endpoints']:
                     continue
-                if not interface.untagged_vlan or self.legacy_vlan_name(interface.untagged_vlan.name):
+                if interface['connected_endpoints'][0]['__typename'] != 'InterfaceType':
+                    continue
+                if not interface['untagged_vlan'] or self.legacy_vlan_name(interface['untagged_vlan']['name']):
                     continue
                 try:
-                    z_device = interface.connected_endpoints[0].device
-                    if z_device.rack != self.device_rack:  # Skip links to devices in other racks (i.e. lvs)
+                    # Use a Pynetbox query to not overload the GraphQL with extra connected_endpoints data
+                    # (cluster ID here, then IPs, custom field, status, etc in normalize_bgp_neighbor)
+                    # To be revisited later on as this is sub-optimal
+                    z_device = self._api.dcim.devices.get(name=interface['connected_endpoints'][0]['device']['name'])
+                    # Skip links to devices in other racks (i.e. lvs)
+                    if z_device.rack.name != self.device_rack.name:
                         continue
 
                     # For Ganeti hosts we need to work out if VMs peer with the switch
@@ -189,22 +176,11 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                     bgp_neighbors[neighbor['group']][neighbor['name']] = neighbor['ip_addresses']
         return bgp_neighbors
 
-    def _get_interface_ip_addresses(self, interface_name):
-        """Returns IPs belonging to a specific interface."""
-        if not self._interface_ip_addresses:
-            self._interface_ip_addresses = {}
-            for ip_address in self.fetch_device_ip_addresses():
-                if ip_address.assigned_object.name not in self._interface_ip_addresses:
-                    self._interface_ip_addresses[ip_address.assigned_object.name] = {4: [], 6: []}
-                self._interface_ip_addresses[ip_address.assigned_object.name][ip_address.family.value].append(
-                    ip_address)
-        return self._interface_ip_addresses[interface_name]
-
     # We have to specify in the Junos chassis stanza how many LAG interfaces we want to provision
     # This function returns how many ae interfaces are configured on the device
     def _get_lag_count(self) -> int:
-        """Expose how may LAG interface we need instanciated (includind disabled)."""
-        return sum(1 for nb_int in self.fetch_device_interfaces() if nb_int.type.value == 'lag')
+        """Expose how may LAG interface we need instantiated (including disabled)."""
+        return sum(1 for nb_int in self.fetch_device_interfaces() if nb_int['type'] == 'lag')
 
     def _get_vrfs(self) -> Optional[defaultdict[defaultdict, defaultdict]]:
         """Gets VRFs that need to be configured by iterating over device interfaces.
@@ -215,9 +191,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         """
         vrfs: DefaultDict[DefaultDict, defaultdict] = defaultdict(lambda: defaultdict(list))
         for interface in self.fetch_device_interfaces():
-            if interface.vrf:
-                vrfs[interface.vrf.name]['ints'].append(interface.name)
-                vrfs[interface.vrf.name]['id'] = interface.vrf.rd
+            if interface['vrf']:
+                vrfs[interface['vrf']['name']]['ints'].append(interface['name'])
+                vrfs[interface['vrf']['name']]['id'] = interface['vrf']['rd']
 
         return vrfs
 
@@ -234,8 +210,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         underlay_ints = []
         for interface in self.fetch_device_interfaces():
-            if interface.enabled and interface.count_ipaddresses and not interface.vrf and not interface.mgmt_only:
-                underlay_ints.append(interface.name)
+            if (interface['enabled'] and len(interface['ip_addresses']) > 0
+               and not interface['vrf'] and not interface['mgmt_only']):
+                underlay_ints.append(interface['name'])
 
         return underlay_ints
 
@@ -252,18 +229,18 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         port_blocks = {}
         for interface in self.fetch_device_interfaces():
-            if interface.type.value == 'virtual' or interface.type.value == 'lag' or interface.mgmt_only:
+            if interface['type'] == 'virtual' or interface['type'] == 'lag' or interface['mgmt_only']:
                 continue
 
-            port = int(interface.name.split(':')[0].split('/')[-1])
+            port = int(interface['name'].split(':')[0].split('/')[-1])
             if port >= 48:
                 continue
 
             block = port - (port % 4)
-            if interface.type.value.startswith('1000base'):
+            if interface['type'].startswith('1000base'):
                 speed = 1
             else:
-                speed = int(interface.type.value.split('gbase')[0])
+                speed = int(interface['type'].split('gbase')[0])
 
             if block not in port_blocks:
                 port_blocks[block] = speed
@@ -354,17 +331,17 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         }
 
         # If the interface is disabled record that and return, other info irrelevant
-        if not nb_interface.enabled:
+        if not nb_interface['enabled']:
             link_data['enabled'] = False
             return link_data
 
         # If Netbox has a description record that in link_data
-        if nb_interface.description:
-            link_data['nb_int_desc'] = nb_interface.description
+        if nb_interface['description']:
+            link_data['nb_int_desc'] = nb_interface['description']
 
-        if nb_interface.name.startswith("gr-") or nb_interface.name.startswith("st"):
+        if nb_interface['name'].startswith("gr-") or nb_interface['name'].startswith("st"):
             # Get tunnel termination that matches
-            tunnel_termination = self._api.vpn.tunnel_terminations.get(termination_id=nb_interface.id)
+            tunnel_termination = self._api.vpn.tunnel_terminations.get(termination_id=nb_interface['id'])
             if tunnel_termination is None:
                 return link_data
             tunnel = self._api.vpn.tunnels.get(id=tunnel_termination.tunnel.id)
@@ -407,20 +384,25 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         # Set a_int to nb interface object of the near-side of the cable
         a_int = None
-        if nb_interface.cable:
+        if nb_interface['cable']:
             a_int = nb_interface
         else:
             # Try to find parent interface based on name
             for nb_int in self.fetch_device_interfaces():
-                if '.' in nb_interface.name and nb_interface.name.split('.')[0] == nb_int.name:
-                    if nb_int.cable:  # If it's connected, we use that as a_int
+                if '.' in nb_interface['name'] and nb_interface['name'].split('.')[0] == nb_int['name']:
+                    if nb_int['cable']:  # If it's connected, we use that as a_int
                         a_int = nb_int
-                    if not link_data['nb_int_desc'] and nb_int.description:
+                    if not link_data['nb_int_desc'] and nb_int['description']:
                         # Set sub-int description to parent's netbox description if it has none of its own
-                        link_data['nb_int_desc'] = nb_int.description
+                        link_data['nb_int_desc'] = nb_int['description']
 
         # If a_int not set, i.e. no connection, return here as rest of info based on what's connected
         if not a_int:
+            return link_data
+
+        # Safeguard for unterminated cables - T393188 - no need to block, so we act like there is no cable
+        if not a_int['link_peers']:
+            logger.error("Unterminated cable on %s, please delete the cable - T393188", nb_interface['name'])
             return link_data
 
         # Now we can focus on finding the Z side, and there are different scenarios
@@ -430,46 +412,48 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         #    - A device's interface (via another cable)
         #    - A provider
         # - A patch panel (frontport), in that case traverse it first
-        link_data['cable_label'] = a_int.cable.label
+        link_data['cable_label'] = a_int['cable']['label']
 
         # b_int is either the patch panel interface facing out or the initial interface
         # if no patch panel
-        if a_int.link_peers_type == 'dcim.frontport' and a_int.link_peers[0].rear_port:
-            b_int = a_int.link_peers[0].rear_port
+        if a_int['link_peers'][0]['__typename'] == 'FrontPortType' and a_int['link_peers'][0]['rear_port']:
+            b_int = a_int['link_peers'][0]['rear_port']
         else:
             # If the patch panel isn't patched through
             b_int = a_int
         # keep dcim.frontport or rear port below for the cases where patch panels are chained.
         # This doesn't handle all the imaginable cases (eg. chaining patch panels and circuits)
         # But handles all our infra cases. To be expanded as needed.
-        if b_int.link_peers_type in ('dcim.interface', 'dcim.frontport', 'dcim.rearport'):
-            if a_int.connected_endpoints[0].device.virtual_chassis:
+        if b_int['link_peers'][0]['__typename'] in ('InterfaceType', 'FrontPortType', 'RearPortType'):
+            connected_device = a_int['connected_endpoints'][0]['device']
+            if connected_device['virtual_chassis']:
                 # In VCs we use its virtual name stored in the domain field
                 # And only keep the host part
-                link_data['z_dev'] = a_int.connected_endpoints[0].device.virtual_chassis.domain.split('.')[0]
+                link_data['z_dev'] = connected_device['virtual_chassis']['domain'].split('.')[0]
             else:
-                link_data['z_dev'] = a_int.connected_endpoints[0].device.name
-            link_data['z_int'] = a_int.connected_endpoints[0].name
+                link_data['z_dev'] = connected_device['name']
+            link_data['z_int'] = a_int['connected_endpoints'][0]['name']
             # Set the link type depending on the other side's type
             core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
 
-            if a_int.connected_endpoints[0].device.role.slug in core_link_z_dev_types:
+            if connected_device['role']['slug'] in core_link_z_dev_types:
                 link_data['link_type'] = 'Core'
 
-        if b_int.link_peers_type == 'circuits.circuittermination':
+        if b_int['link_peers'][0]['__typename'] == 'CircuitTerminationType':
             # Variables needed regardless of the types of circuits
-            link_data['link_type'] = b_int.link_peers[0].circuit.type.name
-            link_data['provider'] = b_int.link_peers[0].circuit.provider.name
-            link_data['circuit_id'] = b_int.link_peers[0].circuit.cid
-            link_data['circuit_desc'] = b_int.link_peers[0].circuit.description
-            if b_int.link_peers[0].circuit.termination_z:
-                link_data['upstream_speed'] = b_int.link_peers[0].circuit.termination_z.upstream_speed
+            link_data['link_type'] = b_int['link_peers'][0]['circuit']['type']['name']
+            link_data['provider'] = b_int['link_peers'][0]['circuit']['provider']['name']
+            link_data['circuit_id'] = b_int['link_peers'][0]['circuit']['cid']
+            link_data['circuit_desc'] = b_int['link_peers'][0]['circuit']['description']
+            if b_int['link_peers'][0]['circuit']['termination_z']:
+                link_data['upstream_speed'] = b_int['link_peers'][0]['circuit']['termination_z']['upstream_speed']
 
-            if not a_int.connected_endpoints or a_int.connected_endpoints_type == 'circuits.providernetwork':
+            if (not a_int['connected_endpoints']
+               or a_int['connected_endpoints'][0]['__typename'] == 'ProviderNetworkType'):
                 link_data['wmf_z_end'] = False
             else:
-                link_data['z_dev'] = a_int.connected_endpoints[0].device.name
-                link_data['z_int'] = a_int.connected_endpoints[0].name
+                link_data['z_dev'] = a_int['connected_endpoints'][0]['device']['name']
+                link_data['z_int'] = a_int['connected_endpoints'][0]['name']
 
         return link_data
 
@@ -549,12 +533,13 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         """Return the MTU to use on a given interface."""
         mtu = None
         for nb_int in self.fetch_device_interfaces():
-            if nb_int.name == interface_name and nb_int.enabled and nb_int.mtu:
+            if nb_int['name'] == interface_name and nb_int['enabled'] and nb_int['mtu']:
                 # Exact match found
-                return nb_int.mtu
-            if '.' in interface_name and interface_name.split('.')[0] == nb_int.name and nb_int.mtu and nb_int.enabled:
+                return nb_int['mtu']
+            if ('.' in interface_name and interface_name.split('.')[0] == nb_int['name']
+               and nb_int['mtu'] and nb_int['enabled']):
                 # Parent interface found and it have an MTU!
-                mtu = nb_int.mtu
+                mtu = nb_int['mtu']
         # Wait to be done iterating over all the device' interfaces
         # in case an exact match is found after the parent
         return mtu
@@ -572,8 +557,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             # Regarless of what kind of interface it is, set attributes in a Juniper-ish tree
             interface_config = {}
             # TODO skip the ones we don't want
-            interface_config['enabled'] = nb_int.enabled
-            interface_name = nb_int.name
+            interface_config['enabled'] = nb_int['enabled']
+            interface_name = nb_int['name']
             if interface_name in ignore_interfaces:
                 continue
             # Ignore VC links
@@ -583,75 +568,75 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
             interface_config['description'] = self.interface_description(interface_config)
 
-            interface_config['type'] = nb_int.type.value
+            interface_config['type'] = nb_int['type']
 
-            if nb_int.lag:
-                interface_config['lag'] = nb_int.lag.name
+            if nb_int['lag']:
+                interface_config['lag'] = nb_int['lag']['name']
                 jri[interface_name] = interface_config
                 # We store the interfaces contributing to a specific LAG, because if they are of different types,
                 # We will later need to apply the "link-speed mixed" config option.
-                lags_members[nb_int.lag.name].append(interface_name)
+                lags_members[nb_int['lag']['name']].append(interface_name)
                 continue
             # For a LAG, the MTU is set on the ae (virtual) interface not the physical ones (bundle members)
             interface_config['mtu'] = self.interface_mtu(interface_name)
 
-            if nb_int.mac_address:  # Set the MAC if any in netbox
-                interface_config['mac'] = nb_int.mac_address
+            if nb_int['mac_address']:  # Set the MAC if any in netbox
+                interface_config['mac'] = nb_int['mac_address']
 
-            if nb_int.vrf:  # Set the VRF if any in netbox
-                interface_config['vrf'] = nb_int.vrf.name
+            if nb_int['vrf']:  # Set the VRF if any in netbox
+                interface_config['vrf'] = nb_int['vrf']['name']
 
-            if nb_int.mode:  # If the interface is tagged or access
-                interface_config['mode'] = nb_int.mode.value
+            if nb_int['mode']:  # If the interface is tagged or access
+                interface_config['mode'] = nb_int['mode']
                 # We keep the tagged vlan names
                 interface_vlans = set()
 
                 # Interface is set to access but doesn't have any vlan configured: set to default
-                if interface_config['mode'] == 'access' and not nb_int.untagged_vlan:
+                if interface_config['mode'] == 'access' and not nb_int['untagged_vlan']:
                     interface_vlans.add('default')
 
                 # If any tagged interfaces add them to the list
-                if nb_int.mode.value == 'tagged':
-                    for tagged_vlan in nb_int.tagged_vlans:
-                        interface_vlans.add(tagged_vlan.name)
+                if nb_int['mode'] == 'tagged':
+                    for tagged_vlan in nb_int['tagged_vlans']:
+                        interface_vlans.add(tagged_vlan['name'])
 
                 # If there is an untagged interface, add it to the list
                 # Either it's a trunked interface, in that case it will be with the other vlans
                 # Or it's an access interface and it will be alone
-                if nb_int.untagged_vlan:
-                    interface_vlans.add(nb_int.untagged_vlan.name)
+                if nb_int['untagged_vlan']:
+                    interface_vlans.add(nb_int['untagged_vlan']['name'])
                     # Junos needs the native vlan ID and not the name
-                    if nb_int.mode.value == 'tagged':
-                        interface_config['native_vlan_id'] = nb_int.untagged_vlan.vid
+                    if nb_int['mode'] == 'tagged':
+                        interface_config['native_vlan_id'] = nb_int['untagged_vlan']['vid']
 
                 interface_config['vlans'] = list(interface_vlans)
 
             # Assign the IPs to the interface if any
-            if nb_int.count_ipaddresses > 0:
+            if len(nb_int['ip_addresses']) > 0:
                 # assumes there is v4 for everything
                 interface_config['ips'] = {4: {}, 6: {}}
                 virt_ips = {}
-                int_addresses = self._get_interface_ip_addresses(nb_int.name)
-                for address_fam in [4, 6]:
-                    for ip_address in int_addresses[address_fam]:
-                        if ip_address.role and ip_address.role.value == 'anycast':
-                            if len(int_addresses[address_fam]) > 1:
-                                # Int must also have a unique IP so we just save this as VGA VIP
-                                virt_ips[ip_address.address] = None
-                                interface_config['anycast_gw'] = 'vga'
-                                continue
-                            else:
-                                interface_config['anycast_gw'] = 'single'
-                        interface_config['ips'][address_fam][ip_interface(ip_address.address)] = {}
+                for ip_address in nb_int['ip_addresses']:
+                    if ip_address['role'] == 'anycast':
+                        count_ips_family = sum(1 for ip in nb_int['ip_addresses']
+                                               if ip["family"]["value"] == ip_address["family"]["value"])
+                        if count_ips_family > 1:
+                            # Int must also have a unique IP so we just save this as VGA VIP
+                            virt_ips[ip_address['address']] = None
+                            interface_config['anycast_gw'] = 'vga'
+                            continue
+                        else:
+                            interface_config['anycast_gw'] = 'single'
+                    interface_config['ips'][ip_address["family"]["value"]][ip_interface(ip_address['address'])] = {}
 
                 # Assume that interfaces with FHRP IPs will always have "real" IPs
-                if nb_int.count_fhrp_groups > 0:
-                    for fhrp_assignment in self._api.ipam.fhrp_group_assignments.filter(interface_id=nb_int.id):
-                        for ip_addresses in fhrp_assignment.group.ip_addresses:
-                            virt_ips[ip_addresses.address] = {
-                                'group': fhrp_assignment.group.group_id,
-                                'priority': fhrp_assignment.priority
-                            }
+                # TODO: perf regression as we now run a pynetbox query for each interface that have an IP
+                for fhrp_assignment in self._api.ipam.fhrp_group_assignments.filter(interface_id=nb_int['id']):
+                    for ip_addresses in fhrp_assignment.group.ip_addresses:
+                        virt_ips[ip_addresses.address] = {
+                            'group': fhrp_assignment.group.group_id,
+                            'priority': fhrp_assignment.priority
+                        }
 
                 # Now assign any VRRP/Anycast IP to the real interface,
                 # for that we need to find IPs belonging in the same subnet
