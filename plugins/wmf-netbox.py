@@ -7,7 +7,7 @@ from re import subn
 from collections import defaultdict
 from typing import Any, DefaultDict, Dict, Optional
 
-from ipaddress import ip_interface
+from ipaddress import ip_interface, ip_network
 
 from homer.netbox import BaseNetboxDeviceData
 
@@ -82,43 +82,33 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         return self._device_ip_addresses
 
     def fetch_bgp_servers_l2(self, site: str = '') -> list:
-        """Fetch VMs or VC servers with the BGP custom field from Netbox which peer with CRs."""
+        """Fetch VMs or servers on legacy vlans with BGP custom field set that should peer with CRs."""
         if self._bgp_servers:
             return self._bgp_servers
 
-        filters = {'status': 'active',
-                   'role': 'server',
-                   'cf_bgp': True}
-        if site:  # slug
-            filters['site'] = site
+        # We decide if devices should peer with CR based on Vlan membership, we compile
+        # in advance the legacy vlans at the site and a list of associated prefixes
+        site_vlans = self._api.ipam.vlans.filter(site=site, name__isw=('private1', 'public1'))
+        legacy_vlan_ids = [vlan.id for vlan in site_vlans if self.legacy_vlan_name(vlan.name)]
+        if not legacy_vlan_ids:
+            # Sites with only L3 switches and per-rack vlans
+            return self._bgp_servers
+        legacy_prefixes_nb = self._api.ipam.prefixes.filter(vlan_id=legacy_vlan_ids)
+        legacy_prefixes = [ip_network(legacy_prefix) for legacy_prefix in legacy_prefixes_nb]
 
-        # In the future we can filter here based on clusters (eg. L3 ganeti)
-        bgp_vms = list(self._api.virtualization.virtual_machines.filter(**filters))
-        for bgp_vm in bgp_vms:
-            hypervisors = self._api.dcim.devices.filter(cluster_id=bgp_vm.cluster.id)
-            for hypervisor in hypervisors:
-                try:
-                    # Get the switch the ganeti host is connected to
-                    ganeti_bridge = hypervisor.primary_ip.assigned_object
-                    ganeti_uplink = self._api.dcim.interfaces.get(device_id=hypervisor.id, bridge_id=ganeti_bridge.id,
-                                                                  type__neq='virtual')
-                    switchport = ganeti_uplink.connected_endpoints[0]
-                    # We include the server if it's connected to a VC switch or row-wide vlan
-                    if switchport.device.virtual_chassis or self.legacy_vlan_name(switchport.untagged_vlan.name):
-                        self._bgp_servers.append(bgp_vm)
-                except AttributeError:
-                    # For example if the server's primary interface is not connected
-                    continue
-                break
+        # Build list of active VMs and Hosts at this site with bgp flag enabled
+        filters = {'site': site, 'status': 'active', 'role': 'server', 'cf_bgp': True}
+        bgp_devices = (list(self._api.dcim.devices.filter(**filters))
+                       + list(self._api.virtualization.virtual_machines.filter(**filters)))
 
-        bgp_devices = list(self._api.dcim.devices.filter(**filters))
+        # If they are in a legacy vlan add to the list
         for bgp_device in bgp_devices:
-            try:
-                switchport = bgp_device.primary_ip.assigned_object.connected_endpoints[0]
-                if switchport.device.virtual_chassis or self.legacy_vlan_name(switchport.untagged_vlan.name):
+            device_ip = ip_interface(bgp_device.primary_ip)
+            for prefix in legacy_prefixes:
+                if prefix.version == device_ip.version and prefix.supernet_of(device_ip.network):  # type: ignore
                     self._bgp_servers.append(bgp_device)
-            except AttributeError:
-                continue
+                    break
+
         return self._bgp_servers
 
     def normalize_bgp_neighbor(self, server) -> dict:
