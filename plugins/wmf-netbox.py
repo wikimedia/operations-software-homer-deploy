@@ -648,20 +648,24 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                 if nb_int.count_fhrp_groups > 0:
                     for fhrp_assignment in self._api.ipam.fhrp_group_assignments.filter(interface_id=nb_int.id):
                         for ip_addresses in fhrp_assignment.group.ip_addresses:
-                            virt_ips[ip_addresses.address] = fhrp_assignment.group.group_id
+                            virt_ips[ip_addresses.address] = {
+                                'group': fhrp_assignment.group.group_id,
+                                'priority': fhrp_assignment.priority
+                            }
 
                 # Now assign any VRRP/Anycast IP to the real interface,
                 # for that we need to find IPs belonging in the same subnet
                 for family, int_ips in interface_config['ips'].items():
                     for int_ip in int_ips.keys():
-                        for virt_ip, vrrp_group in virt_ips.items():
+                        for virt_ip, vrrp_data in virt_ips.items():
                             if ip_interface(virt_ip) in int_ip.network:
-                                if vrrp_group or vrrp_group == 0:
-                                    interface_config['ips'][family][int_ip]['vrrp'] = {
-                                        ip_interface(virt_ip).ip: vrrp_group
-                                    }
-                                else:
+                                if vrrp_data is None:
+                                    # Anycast GW Interface so no VRRP info
                                     interface_config['ips'][family][int_ip]['anycast'] = ip_interface(virt_ip).ip
+                                else:
+                                    interface_config['ips'][family][int_ip]['vrrp'] = {
+                                        ip_interface(virt_ip).ip: vrrp_data
+                                    }
 
             # Now that we have all the interface attributes, we add it to the jri dict,
             # either directly or as a 'sub' to the parent int
