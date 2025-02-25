@@ -265,7 +265,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             return "DISABLED"
 
         if intconf['nb_int_desc']:
-            # Custom description from Netbox descrtiption field
+            # Custom description from Netbox description field
             return intconf['nb_int_desc']
 
         if intconf['tunnel']:
@@ -274,7 +274,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                        f"{intconf['z_dev']}:{intconf['z_int']} {intconf['tunnel']['description']}"
             else:
                 return intconf['tunnel']['description']
-
         if intconf['circuit_id']:
             # Link connects to a third party circuit
             cct_desc = f"{intconf['circuit_id']} {intconf.get('circuit_desc', '')}".strip()
@@ -405,55 +404,43 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             logger.error("Unterminated cable on %s, please delete the cable - T393188", nb_interface['name'])
             return link_data
 
-        # Now we can focus on finding the Z side, and there are different scenarios
-        # An interface can be connected (using a cable) to:
-        # - A device's interface (easy)
-        # - A circuit, itself connected to:
-        #    - A device's interface (via another cable)
-        #    - A provider
-        # - A patch panel (frontport), in that case traverse it first
         link_data['cable_label'] = a_int['cable']['label']
-
-        # b_int is either the patch panel interface facing out or the initial interface
-        # if no patch panel
-        if a_int['link_peers'][0]['__typename'] == 'FrontPortType' and a_int['link_peers'][0]['rear_port']:
-            b_int = a_int['link_peers'][0]['rear_port']
-        else:
-            # If the patch panel isn't patched through
-            b_int = a_int
-        # keep dcim.frontport or rear port below for the cases where patch panels are chained.
-        # This doesn't handle all the imaginable cases (eg. chaining patch panels and circuits)
-        # But handles all our infra cases. To be expanded as needed.
-        if b_int['link_peers'][0]['__typename'] in ('InterfaceType', 'FrontPortType', 'RearPortType'):
-            connected_device = a_int['connected_endpoints'][0]['device']
-            if connected_device['virtual_chassis']:
-                # In VCs we use its virtual name stored in the domain field
-                # And only keep the host part
-                link_data['z_dev'] = connected_device['virtual_chassis']['domain'].split('.')[0]
+        # If interface connected to another NB device
+        if a_int['connected_endpoints'] and a_int['connected_endpoints'][0]['__typename'] == "InterfaceType":
+            b_int = a_int['connected_endpoints'][0]
+            link_data['wmf_z_end'] = True
+            link_data['z_int'] = b_int['name']
+            if b_int['device']['virtual_chassis']:
+                link_data['z_dev'] = b_int['device']['virtual_chassis']['domain'].split('.')[0]
             else:
-                link_data['z_dev'] = connected_device['name']
-            link_data['z_int'] = a_int['connected_endpoints'][0]['name']
-            # Set the link type depending on the other side's type
-            core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
+                link_data['z_dev'] = b_int['device']['name']
 
-            if connected_device['role']['slug'] in core_link_z_dev_types:
+            # Set link-type to core if it lands on a network device
+            core_link_z_dev_types = ['cr', 'asw', 'mr', 'msw', 'pfw', 'cloudsw']
+            if b_int['device']['role']['slug'] in core_link_z_dev_types:
                 link_data['link_type'] = 'Core'
 
-        if b_int['link_peers'][0]['__typename'] == 'CircuitTerminationType':
-            # Variables needed regardless of the types of circuits
-            link_data['link_type'] = b_int['link_peers'][0]['circuit']['type']['name']
-            link_data['provider'] = b_int['link_peers'][0]['circuit']['provider']['name']
-            link_data['circuit_id'] = b_int['link_peers'][0]['circuit']['cid']
-            link_data['circuit_desc'] = b_int['link_peers'][0]['circuit']['description']
-            if b_int['link_peers'][0]['circuit']['termination_z']:
-                link_data['upstream_speed'] = b_int['link_peers'][0]['circuit']['termination_z']['upstream_speed']
+        if (not a_int['connected_endpoints']
+           or a_int['connected_endpoints'][0]['__typename'] == 'ProviderNetworkType'):
+            link_data['wmf_z_end'] = False
 
-            if (not a_int['connected_endpoints']
-               or a_int['connected_endpoints'][0]['__typename'] == 'ProviderNetworkType'):
-                link_data['wmf_z_end'] = False
-            else:
-                link_data['z_dev'] = a_int['connected_endpoints'][0]['device']['name']
-                link_data['z_int'] = a_int['connected_endpoints'][0]['name']
+        circuit = None
+        # If interface is directly connected to a circuit
+        if a_int['link_peers'][0]['__typename'] == 'CircuitTerminationType':
+            circuit = a_int['link_peers'][0]['circuit']
+        # If it's connected to a circuit via patch panel
+        elif (a_int['link_peers'][0]['__typename'] == 'FrontPortType'
+              and a_int['link_peers'][0]['rear_port']['link_peers'][0]['__typename'] == 'CircuitTerminationType'):
+            # NOTE: Patch panels could be daisy-chained, which GraphQL won't give us, but we don't have that now
+            circuit = a_int['link_peers'][0]['rear_port']['link_peers'][0]['circuit']
+
+        if circuit:
+            link_data['link_type'] = circuit['type']['name']
+            link_data['provider'] = circuit['provider']['name']
+            link_data['circuit_id'] = circuit['cid']
+            link_data['circuit_desc'] = circuit['description']
+            if circuit['termination_z']:
+                link_data['upstream_speed'] = circuit['termination_z']['upstream_speed']
 
         return link_data
 
