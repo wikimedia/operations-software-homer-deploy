@@ -47,9 +47,9 @@ NO_QOS_INTS = ('irb', 'lo', 'fxp', 'em', 'vme')
 class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
     """WMF specific class to gather device-specific data dynamically from Netbox."""
 
-    def __init__(self, netbox_api, device):
+    def __init__(self, netbox_api, base_paths, device):
         """Initialize the instance."""
-        super().__init__(netbox_api, device)
+        super().__init__(netbox_api, base_paths, device)
         self._device_interfaces = None
         self._device_ip_addresses = None
         self._interface_ip_addresses = None
