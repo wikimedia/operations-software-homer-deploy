@@ -26,12 +26,12 @@ cp -a ../.git/modules/src .git
 sed -i '/worktree =/d' .git/config
 
 virtualenv "$VENV"
-$PIP install --upgrade pip
+$PIP install --upgrade pip setuptools setuptools_scm importlib_metadata
 $PIP install "."
 $PIP freeze --local --all > "${FROZEN_REQUIREMENTS}"
 
 # https://github.com/pypa/pip/issues/4668
-sed -i '/pkg-resources==0\.0\.0/d' "${FROZEN_REQUIREMENTS}"
+sed -i '/pkg[-_]resources==0\.0\.0/d' "${FROZEN_REQUIREMENTS}"
 # Remove homer as it was added by pip but is not needed
 sed -i '/^homer==/d' "${FROZEN_REQUIREMENTS}"
 sed -i '/^homer @/d' "${FROZEN_REQUIREMENTS}"

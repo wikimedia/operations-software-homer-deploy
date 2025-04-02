@@ -4,10 +4,7 @@ FROM docker-registry.wikimedia.org/python3-build-${DEBIAN_VER}:latest
 USER root
 
 RUN apt-get update && \
-    apt-get -y --no-install-recommends install build-essential python3-dev \
-        libsasl2-dev && \
-    python3 -m pip install --upgrade setuptools_scm && \
-    python3 -m pip install --upgrade pip
+    apt-get -y --no-install-recommends install build-essential python3-dev libsasl2-dev
 
 USER nobody
 
