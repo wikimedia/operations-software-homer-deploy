@@ -97,7 +97,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         legacy_prefixes = [ip_network(legacy_prefix) for legacy_prefix in legacy_prefixes_nb]
 
         # Build list of active VMs and Hosts at this site with bgp flag enabled
-        filters = {'site': site, 'status': 'active', 'role': 'server', 'cf_bgp': True}
+        filters = {'site': site, 'status': 'active', 'role': 'server', 'cf_bgp': True, 'has_primary_ip': True}
         bgp_devices = (list(self._api.dcim.devices.filter(**filters))
                        + list(self._api.virtualization.virtual_machines.filter(**filters)))
 
