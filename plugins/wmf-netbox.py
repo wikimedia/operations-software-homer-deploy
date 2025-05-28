@@ -5,11 +5,12 @@ import logging
 from re import subn
 
 from collections import defaultdict
-from typing import Any, DefaultDict, Dict, Optional
+from typing import DefaultDict, Dict, Optional
 
 from ipaddress import ip_interface, ip_network
 
-from homer.netbox import BaseNetboxDeviceData
+from homer.netbox import BaseNetboxDeviceData, gql_execute
+from homer.config import HierarchicalConfig
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ SWITCHES_ROLES = ('asw', 'cloudsw')
 L3_SWITCHES_MODELS = ('qfx5120-48y-afi', 'qfx5120-48y-afi2')
 JUNIPER_LEGACY_SW = ('qfx5100-48s-6q', 'ex4600-40f', 'ex4300-48t')
 NO_QOS_INTS = ('irb', 'lo', 'fxp', 'em', 'vme')
+LOOPBACK_INT_NAMES = ('lo0', 'system0')
 
 
 class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
@@ -56,12 +58,16 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self._bgp_servers = []
         self._junos_interfaces = {}
         self._qos_interfaces = {}
+        self._ibgp_config = {}
         self.device_id = self._device.metadata['netbox_object'].id
         self.role = self._device.metadata['netbox_object'].role
+        self.hostname = self._device.metadata['netbox_object'].name
         self.device_type = self._device.metadata['netbox_object'].device_type
         self.device_rack = self._device.metadata['netbox_object'].rack
         self.device_site = self._device.metadata['netbox_object'].site
         self.virtual_chassis = self._device.metadata['netbox_object'].virtual_chassis
+        # TODO: should we instead pass the device_data object from the main Homer class to the plugin?
+        self.device_data = HierarchicalConfig(base_paths['public']).get(device)
 
     def fetch_bgp_servers_l2(self, site: str = '') -> list:
         """Fetch VMs or servers on legacy vlans with BGP custom field set that should peer with CRs."""
@@ -198,24 +204,94 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         return vrfs
 
-    def _get_underlay_ints(self) -> Optional[list[Dict[str, Any]]]:
-        """Returns a list of interface names belonging to the underlay that require OSPF.
+    def _get_ibgp_config(self) -> dict:
+        """Returns required data for switch IBGP configuration if it is part of a defined cluster"""
 
-        Returns:
-            list: a list of interface names.
-            None: the device is not part of an underlay switch fabric requiring OSFP.
+        if self._ibgp_config:
+            return self._ibgp_config
 
-        """
-        if 'evpn' not in self._device.config:
-            return None
+        if not (self.role.slug in SWITCHES_ROLES and 'ibgp_clusters' in self.device_data):
+            return {}
 
-        underlay_ints = []
-        for interface in self.fetch_device_interfaces():
-            if (interface['enabled'] and len(interface['ip_addresses']) > 0
-               and not interface['vrf'] and not interface['mgmt_only']):
-                underlay_ints.append(interface['name'])
+        ibgp_clusters = self.device_data['ibgp_clusters']
+        asn = None
+        rr = False
+        # Find cluster and pod we are part of:
+        for as_number, cluster_data in ibgp_clusters.items():
+            for pod_name, pod_data in cluster_data['pods'].items():
+                if self.hostname in pod_data['rr']:
+                    rr = True
+                if self.hostname in pod_data['rr'] or self.hostname in pod_data['client']:
+                    asn = as_number
+                    pod = pod_name
 
-        return underlay_ints
+        if not asn:
+            return {}
+
+        ibgp_config = {
+            'asn': asn,
+            'rr': rr,
+            'evpn': ibgp_clusters[asn]['evpn'],
+            'peers': {},
+            'source_ips': {},
+            'ospf_ints': [],
+            'ospf3': False if ibgp_clusters[asn]['evpn'] else True
+        }
+
+        # Get loopback IPs of local device
+        interfaces = self.fetch_device_interfaces()
+        loop_int = [interface for interface in interfaces if interface['name'] in LOOPBACK_INT_NAMES]
+        for address in loop_int[0]['ip_addresses']:
+            ip_addr = ip_interface(address['address'])
+            ibgp_config['source_ips'][ip_addr.version] = ip_addr.ip.compressed
+
+        # Compile lists with all cluster/pod members and rrs
+        pod_members = ibgp_clusters[asn]['pods'][pod]['rr'] + ibgp_clusters[asn]['pods'][pod]['client']
+        cluster_members = []
+        cluster_rr = []
+        for pod_name, pod_data in ibgp_clusters[asn]['pods'].items():
+            cluster_members += (pod_data['rr'] + pod_data['client'])
+            cluster_rr += pod_data['rr']
+
+        # Populate list of peers
+        if rr:
+            ibgp_config['peers'] = {peer_name: {} for peer_name in pod_members if peer_name != self.hostname}
+            ibgp_config['peers'] |= {peer_name: {} for peer_name in cluster_rr if peer_name != self.hostname}
+        else:
+            ibgp_config['peers'] = {peer_name: {} for peer_name in ibgp_clusters[asn]['pods'][pod]['rr']}
+
+        # Get the peer IPs from Netbox with GraphQL
+        loopback_query = '''
+            query ($peer_names: [String!], $loopback_names: [String!]) {
+              device_list(filters: {name: {in_list: $peer_names}}) {
+                name
+                interfaces(filters: {name: {in_list: $loopback_names}}) {
+                  name
+                  ip_addresses {
+                    address
+            } } } }
+        '''
+        query_vars = {'peer_names': list(ibgp_config['peers'].keys()), 'loopback_names': LOOPBACK_INT_NAMES}
+        peer_loopbacks = gql_execute(self._api, loopback_query, query_vars)
+
+        # Add the peer loopback IPs to ibgp_config
+        for loopback_data in peer_loopbacks['device_list']:
+            peer_name = loopback_data['name']
+            for address in loopback_data['interfaces'][0]['ip_addresses']:
+                ip_addr = ip_interface(address['address'])
+                ibgp_config['peers'][peer_name][ip_addr.version] = ip_addr.ip.compressed
+
+        # Generate list of interfaces that we enable OSPF(3) on
+        for interface in interfaces:
+            if interface['name'] in LOOPBACK_INT_NAMES:
+                ibgp_config['ospf_ints'].append(interface['name'])
+            if not interface['vrf'] and interface['connected_endpoints']:
+                remote_device = interface['connected_endpoints'][0]['device']['name']
+                if remote_device in cluster_members:
+                    ibgp_config['ospf_ints'].append(interface['name'])
+
+        self._ibgp_config = ibgp_config
+        return ibgp_config
 
     def _get_port_block_speeds(self) -> Optional[Dict[int, int]]:
         """Returns a dict keyed by first port ID of every block of 4 ports and speed for QFX5120-48Y.
