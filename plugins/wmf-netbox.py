@@ -306,7 +306,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         port_blocks = {}
         for interface in self.fetch_device_interfaces():
-            if interface['type'] == 'virtual' or interface['type'] == 'lag' or interface['mgmt_only']:
+            if interface['type'] == 'virtual' or interface['type'] == 'lag' or interface['mgmt_only'] \
+                    or not interface['enabled']:
                 continue
 
             port = int(interface['name'].split(':')[0].split('/')[-1])
@@ -324,6 +325,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             elif port_blocks[block] != speed:
                 # Return none if invalid combo, resulting in generated config without pic 0
                 # stanza. This prevents an error in Netbox changing working config.
+                logger.error("Port block error: port %s inconsistent speed in block %s", port, block)
                 return None
 
         return port_blocks
