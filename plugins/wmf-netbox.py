@@ -325,7 +325,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             elif port_blocks[block] != speed:
                 # Return none if invalid combo, resulting in generated config without pic 0
                 # stanza. This prevents an error in Netbox changing working config.
-                logger.error("Port block error: port %s inconsistent speed in block %s", port, block)
+                logger.error("%s: Port block error: port %s inconsistent speed in block %s",
+                             self.hostname, port, block)
                 return None
 
         return port_blocks
@@ -480,7 +481,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         # Safeguard for unterminated cables - T393188 - no need to block, so we act like there is no cable
         if not a_int['link_peers']:
-            logger.error("Unterminated cable on %s, please delete the cable - T393188", nb_interface['name'])
+            logger.error("%s: unterminated cable on %s, please delete the cable - T393188",
+                         self.hostname, nb_interface['name'])
             return link_data
 
         link_data['cable_label'] = a_int['cable']['label']
