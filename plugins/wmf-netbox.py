@@ -41,7 +41,7 @@ HOSTNAMES_TO_GROUPS: Dict[str, Dict] = {'aux-k8s-ctrl': {'group': 'k8s_aux'},
                                         }
 
 SWITCHES_ROLES = ('asw', 'cloudsw')
-L3_SWITCHES_MODELS = ('qfx5120-48y-afi', 'qfx5120-48y-afi2')
+L3_TOP_OF_RACK_MODELS = ('qfx5120-48y-afi', 'qfx5120-48y-afi2', '7220-ixr-d2l')
 JUNIPER_LEGACY_SW = ('qfx5100-48s-6q', 'ex4600-40f', 'ex4300-48t')
 NO_QOS_INTS = ('irb', 'lo', 'fxp', 'em', 'vme')
 LOOPBACK_INT_NAMES = ('lo0', 'system0')
@@ -137,7 +137,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         """Servers that need BGP configured on that router."""
         bgp_neighbors: DefaultDict = defaultdict(dict)
         # For L3 switches iterate over the directly connected servers
-        if self.role.slug in SWITCHES_ROLES and self.device_type.slug in L3_SWITCHES_MODELS:
+        if self.role.slug in SWITCHES_ROLES and self.device_type.slug in L3_TOP_OF_RACK_MODELS:
             ganeti_clusters = set()
             for interface in self.fetch_device_interfaces():
                 if not interface['connected_endpoints']:
@@ -754,3 +754,18 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
 
         self._junos_interfaces = jri
         return jri
+
+    def _get_device_interfaces(self) -> dict:
+        """Retruns generic device interface data for use in templates or modules"""
+        device_ints = {}
+
+        for interface in self.fetch_device_interfaces():
+            int_name = interface['name']
+            device_ints[int_name] = interface
+            # Augment with the derived link_data info
+            link_data = self._get_link_data(interface)
+            device_ints[int_name]['link_data'] = link_data
+            device_ints[int_name]['description'] = self.interface_description(link_data)
+            device_ints[int_name]['mtu'] = self.interface_mtu(int_name)
+
+        return device_ints
