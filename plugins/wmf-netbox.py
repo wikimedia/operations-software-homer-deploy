@@ -223,7 +223,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                     rr = True
                 if self.hostname in pod_data['rr'] or self.hostname in pod_data['client']:
                     asn = as_number
-                    pod = pod_name
+                    pod = pod_data
+                    pod_members = pod['rr'] + pod['client']
 
         if not asn:
             return {}
@@ -245,8 +246,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             ip_addr = ip_interface(address['address'])
             ibgp_config['source_ips'][ip_addr.version] = ip_addr.ip.compressed
 
-        # Compile lists with all cluster/pod members and rrs
-        pod_members = ibgp_clusters[asn]['pods'][pod]['rr'] + ibgp_clusters[asn]['pods'][pod]['client']
+        # Compile lists with members of wider cluster
         cluster_members = []
         cluster_rr = []
         for pod_name, pod_data in ibgp_clusters[asn]['pods'].items():
@@ -254,11 +254,15 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             cluster_rr += pod_data['rr']
 
         # Populate list of peers
+        ibgp_config['peers'] = defaultdict(dict)
         if rr:
-            ibgp_config['peers'] = {peer_name: {} for peer_name in pod_members if peer_name != self.hostname}
-            ibgp_config['peers'] |= {peer_name: {} for peer_name in cluster_rr if peer_name != self.hostname}
+            for peer_name in pod_members + cluster_rr:
+                if peer_name == self.hostname:
+                    continue
+                ibgp_config['peers'][peer_name]["rr_client"] = True if peer_name in pod['client'] else False
         else:
-            ibgp_config['peers'] = {peer_name: {} for peer_name in ibgp_clusters[asn]['pods'][pod]['rr']}
+            for peer_name in pod['rr']:
+                ibgp_config['peers'][peer_name]["rr_client"] = False
 
         # Get the peer IPs from Netbox with GraphQL
         loopback_query = '''
@@ -277,9 +281,10 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         # Add the peer loopback IPs to ibgp_config
         for loopback_data in peer_loopbacks['device_list']:
             peer_name = loopback_data['name']
+            ibgp_config['peers'][peer_name]['addresses'] = {}
             for address in loopback_data['interfaces'][0]['ip_addresses']:
                 ip_addr = ip_interface(address['address'])
-                ibgp_config['peers'][peer_name][ip_addr.version] = ip_addr.ip.compressed
+                ibgp_config['peers'][peer_name]['addresses'][ip_addr.version] = ip_addr.ip.compressed
 
         # Generate list of interfaces that we enable OSPF(3) on
         for interface in interfaces:
