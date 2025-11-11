@@ -45,6 +45,7 @@ L3_TOP_OF_RACK_MODELS = ('qfx5120-48y-afi', 'qfx5120-48y-afi2', '7220-ixr-d2l')
 JUNIPER_LEGACY_SW = ('qfx5100-48s-6q', 'ex4600-40f', 'ex4300-48t')
 NO_QOS_INTS = ('irb', 'lo', 'fxp', 'em', 'vme')
 LOOPBACK_INT_NAMES = ('lo0', 'system0')
+LARGE_ML_SERVER_TYPES = ('as-8125gs-tnmr2')
 
 
 class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
@@ -152,7 +153,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                     # To be revisited later on as this is sub-optimal
                     z_device = self._api.dcim.devices.get(name=interface['connected_endpoints'][0]['device']['name'])
                     # Skip links to devices in other racks (i.e. lvs)
-                    if z_device.rack.name != self.device_rack.name:
+
+                    if z_device.rack.name != self.device_rack.name and \
+                       z_device.device_type.slug not in LARGE_ML_SERVER_TYPES:
                         continue
 
                     # For Ganeti hosts we need to work out if VMs peer with the switch
