@@ -403,8 +403,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                     z_int: name of interface where the connection lands on connected device (default: empty string)
                     wmf_z_end: boolean indicating if the z_end device is a node managed by WMF (default: True)
                     tunnel: dict with detail of tunnel config params if it is a GRE int
-                    upstream_speed: sub-rated peak speed of connected service/circuit if lower than line rate,
-                                    taken from the 'upstream_speed' attribute of the cct termination (default: None)
+                    commit_rate: sub-rated peak speed of connected service/circuit if lower than line rate,
+                                 taken from the 'commit_rate' attribute of the cct (default: None)
 
         """
         link_data = {
@@ -417,7 +417,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             "z_int": '',
             "wmf_z_end": True,
             "tunnel": {},
-            "upstream_speed": None
+            "commit_rate": None
         }
 
         # If the interface is disabled record that and return, other info irrelevant
@@ -531,8 +531,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             link_data['provider'] = circuit['provider']['name']
             link_data['circuit_id'] = circuit['cid']
             link_data['circuit_desc'] = circuit['description']
-            if circuit['termination_z']:
-                link_data['upstream_speed'] = circuit['termination_z']['upstream_speed']
+            link_data['commit_rate'] = circuit['commit_rate']
 
         return link_data
 
@@ -573,8 +572,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             if "description" in int_conf:
                 qos_ints[int_name]['description'] = int_conf['description']
             # If circuit has sub-rated peak rate set the shaper to 98% of max
-            if "upstream_speed" in int_conf and int_conf['upstream_speed']:
-                qos_ints[int_name]['shape_rate'] = int(int_conf['upstream_speed'] * 0.98)
+            if "commit_rate" in int_conf and int_conf['commit_rate']:
+                qos_ints[int_name]['shape_rate'] = int(int_conf['commit_rate'] * 0.98)
 
             if self.role.slug in SWITCHES_ROLES:
                 # Standard L2 ports facing servers or CRs
