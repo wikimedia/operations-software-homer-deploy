@@ -33,6 +33,5 @@ transitions==0.9.3
 typing_extensions==4.15.0
 urllib3==2.7.0
 vcs-versioning==1.1.1
-wheel==0.38.4
 yamlloader==1.6.0
 zipp==3.23.1
