@@ -132,6 +132,9 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
     def legacy_vlan_name(self, vlan_name) -> bool:
         """Returns true if vlan name convention is legacy row-wide."""
         split_name = vlan_name.split('-')
+        # Temporary, we need to treat *-603-eqsin as legacy until switch refresh T428229
+        if split_name[-1] == "eqsin":
+            return True
         # If no rack location in vlan name or rack location is only 1 char (i.e. row-wide)
         if len(split_name) < 3 or len(split_name[1]) == 1:
             return True
