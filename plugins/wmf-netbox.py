@@ -371,12 +371,14 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         if intconf['circuit_id']:
             # Link connects to a third party circuit
             cct_desc = f"{intconf['circuit_id']} {intconf.get('circuit_desc', '')}".strip()
+            commit_rate = f" [{int(intconf['commit_rate'] / 1000000)}Gbps]" if intconf['commit_rate'] else ''
             if intconf['wmf_z_end']:
                 # Typically transport circuit
                 return f"{intconf['link_type']}: {intconf['z_dev']}:{intconf['z_int']} ({intconf['provider']}, " \
-                    f"{cct_desc}) {{#{intconf['cable_label']}}}"
-            # Typically transit circuit
-            return f"{intconf['link_type']}: {intconf['provider']} ({cct_desc}) {{#{intconf['cable_label']}}}"
+                    f"{cct_desc}){commit_rate} {{#{intconf['cable_label']}}}"
+            # Typically transit/VPLS circuit
+            return f"{intconf['link_type']}: {intconf['provider']} " \
+                f"({cct_desc}){commit_rate} {{#{intconf['cable_label']}}}"
 
         if intconf['z_dev']:
             # Direct link between two WMF devices
