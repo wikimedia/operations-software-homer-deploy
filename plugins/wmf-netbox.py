@@ -375,19 +375,16 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
             if intconf['wmf_z_end']:
                 # Typically transport circuit
                 return f"{intconf['link_type']}: {intconf['z_dev']}:{intconf['z_int']} ({intconf['provider']}, " \
-                    f"{cct_desc}){commit_rate} {{#{intconf['cable_label']}}}"
+                    f"{cct_desc}){commit_rate}"
             # Typically transit/VPLS circuit
             return f"{intconf['link_type']}: {intconf['provider']} " \
-                f"({cct_desc}){commit_rate} {{#{intconf['cable_label']}}}"
+                f"({cct_desc}){commit_rate}"
 
         if intconf['z_dev']:
             # Direct link between two WMF devices
             if intconf['link_type']:
                 # Typically 'core' link between two network devices
-                return f"{intconf['link_type']}: {intconf['z_dev']}:{intconf['z_int']} {{#{intconf['cable_label']}}}"
-            if intconf['cable_label']:
-                # Typically server connection
-                return f"{intconf['z_dev']} {{#{intconf['cable_label']}}}"
+                return f"{intconf['link_type']}: {intconf['z_dev']}:{intconf['z_int']}"
             return f"{intconf['z_dev']}"
 
         return ''
@@ -501,7 +498,6 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                          self.hostname, nb_interface['name'])
             return link_data
 
-        link_data['cable_label'] = a_int['cable']['label']
         # If interface connected to another NB device
         if a_int['connected_endpoints'] and a_int['connected_endpoints'][0]['__typename'] == "InterfaceType":
             b_int = a_int['connected_endpoints'][0]
