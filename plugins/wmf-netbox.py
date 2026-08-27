@@ -649,7 +649,8 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                 for addr_fam, ip_int_dict in unit_conf["ips"].items():
                     ip_int = ip_interface(next(iter(ip_int_dict)))
                     # Far side IP is either one more or one less than ours, based on /31 or v6 conventions
-                    if (addr_fam == 4 and ip_int.ip == ip_int.network.network_address) or int(ip_int.ip) % 2 == 1:
+                    if (addr_fam == 4 and ip_int.ip == ip_int.network.network_address
+                       or addr_fam == 6 and int(ip_int.ip) % 2 == 1):
                         far_side_ip = ip_address(int(ip_int.ip) + 1)
                     else:
                         far_side_ip = ip_address(int(ip_int.ip) - 1)
