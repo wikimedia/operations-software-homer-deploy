@@ -7,7 +7,7 @@ from re import subn
 from collections import defaultdict
 from typing import DefaultDict, Dict, Optional
 
-from ipaddress import ip_interface, ip_network
+from ipaddress import ip_address, ip_interface, ip_network
 
 from homer.netbox import BaseNetboxDeviceData, gql_execute
 from homer.config import HierarchicalConfig
@@ -62,6 +62,7 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self._bgp_servers = []
         self._junos_interfaces = {}
         self._qos_interfaces = {}
+        self._rpm_probes = {}
         self._ibgp_config = {}
         self.device_id = self._device.metadata['netbox_object'].id
         self.role = self._device.metadata['netbox_object'].role
@@ -602,6 +603,61 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
         self._qos_interfaces = qos_ints
         return qos_ints
 
+    def _get_rpm_probes(self) -> dict:
+        """ Auto-generate probe config from transport circuit interface ips and circuit details.
+
+            Returns a dict, keyed by the probe name, with values being a pair of rpm test source
+            and destination IPs.  Probe names are strings based on the carrier and the circuit ID.
+        """
+        if self._rpm_probes:
+            return self._rpm_probes
+        # We only run these on MX platform and from our core sites to POPs
+        if not self.device_type.slug.startswith("mx") or self.device_site.slug not in ("codfw", "eqiad", "eqdfw"):
+            return {}
+        if not self._junos_interfaces:
+            self._get_junos_interfaces()
+
+        rpm_probes: Dict[str, dict] = {}
+        for int_conf in self._junos_interfaces.values():
+            # Only configure probes for transport circuits to remote sites
+            if int_conf.get("link_type", "") != "Transport" or self.device_site.slug in int_conf["z_dev"]:
+                continue
+            if "ips" in int_conf:
+                unit_confs = [int_conf]
+            elif "sub" in int_conf:
+                unit_confs = list(int_conf["sub"].values())
+            else:
+                continue
+
+            for unit_conf in unit_confs:
+                # Avoid probing from both sides of circuits between eqiad/codfw/eqdfw
+                if self.device_site.slug in ("eqdfw", "eqiad") and "codfw" in unit_conf["description"]:
+                    continue
+                # Extract the circuit and provider labels to use
+                provider = unit_conf["provider"].replace("Hurricane Electric", "HE")
+                # Take circuit IDs from description as it's best for multipoint VPLS
+                carrier_info = unit_conf["description"].split("(")[1].replace("Hurricane Electric", "HE")
+                circuit = "_".join(carrier_info.split()[1:]).replace("/", "_").replace(".", "_").rstrip(")")
+                target_site = unit_conf["description"].split()[1].split(":")[0].split("-")[1]
+                probe_name = f"{provider}_{target_site}_{circuit}"
+                # The probe name in JunOS has a 32-char limit which we sometimes exceed
+                if len(probe_name) > 32:
+                    probe_name = probe_name.replace("IC-", "").rstrip("-").rstrip("_")[:32]
+                rpm_probes[probe_name] = {}
+
+                # Process the IPs and add entry for each address fam to probe
+                for addr_fam, ip_int_dict in unit_conf["ips"].items():
+                    ip_int = ip_interface(next(iter(ip_int_dict)))
+                    # Far side IP is either one more or one less than ours, based on /31 or v6 conventions
+                    if (addr_fam == 4 and ip_int.ip == ip_int.network.network_address) or int(ip_int.ip) % 2 == 1:
+                        far_side_ip = ip_address(int(ip_int.ip) + 1)
+                    else:
+                        far_side_ip = ip_address(int(ip_int.ip) - 1)
+                    probe_ips = {"source": ip_int.ip.compressed, "target": far_side_ip.compressed}
+                    rpm_probes[probe_name][f"ip{addr_fam}"] = probe_ips
+
+        return rpm_probes
+
     # If the specific (sub)interface has a non default MTU: return that
     # Else try to find the parent interface MTU
     # Else return None
@@ -692,18 +748,18 @@ class NetboxDeviceDataPlugin(BaseNetboxDeviceData):
                 # assumes there is v4 for everything
                 interface_config['ips'] = {4: {}, 6: {}}
                 virt_ips = {}
-                for ip_address in nb_int['ip_addresses']:
-                    if ip_address['role'] == 'anycast':
+                for ip_addr in nb_int['ip_addresses']:
+                    if ip_addr['role'] == 'anycast':
                         count_ips_family = sum(1 for ip in nb_int['ip_addresses']
-                                               if ip["family"]["value"] == ip_address["family"]["value"])
+                                               if ip["family"]["value"] == ip_addr["family"]["value"])
                         if count_ips_family > 1:
                             # Int must also have a unique IP so we just save this as VGA VIP
-                            virt_ips[ip_address['address']] = None
+                            virt_ips[ip_addr['address']] = None
                             interface_config['anycast_gw'] = 'vga'
                             continue
                         else:
                             interface_config['anycast_gw'] = 'single'
-                    interface_config['ips'][ip_address["family"]["value"]][ip_interface(ip_address['address'])] = {}
+                    interface_config['ips'][ip_addr["family"]["value"]][ip_interface(ip_addr['address'])] = {}
 
                 # Assume that interfaces with FHRP IPs will always have "real" IPs
                 # TODO: perf regression as we now run a pynetbox query for each interface that have an IP
