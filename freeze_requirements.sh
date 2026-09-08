@@ -7,7 +7,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-DISTRO=${1:-bullseye}
+DISTRO=${1:-trixie}
 FROZEN_REQUIREMENTS=/deploy/frozen-requirements-${DISTRO}.txt
 VENV="/deploy/build/venv-${DISTRO}"
 PIP="${VENV}/bin/pip3"
